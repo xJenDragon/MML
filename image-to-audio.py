@@ -1,7 +1,7 @@
 from crewai import Agent
 from langchain_openai import ChatOpenAI
 from crewai import Task, Crew, Process
-from text_to_speech_tool import TextToSpeechTool
+from tts_tool import TextToSpeechTool
 
 # Custom LLM instance supporting multimodal input
 llm_multimodal = ChatOpenAI(model=OPENAI_MODEL)
