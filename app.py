@@ -283,36 +283,69 @@ def run_text_to_sign_crew(text_input: str):
     # Return failure dictionary
     return {"english_input": text_input, "asl_description": "N/A", "avatar_instructions": {}}
 
-def run_text_to_visual_crew(complex_text: str):
-    """Orchestrates the Complex-Text-to-Visual crew."""
 
+def run_text_to_visual_crew(complex_text: str):
+    """Orchestrates the Complex-Text-to-Visual crew using DALL-E 3."""
+
+    # Task 1: Concept Extraction & Prompt Generation
     concept_task = Task(
-        description="Extract key concept and create detailed DALL-E prompt for simplified infographic.",
+        description=(
+            "Analyze the complex text provided: '{text}'. "
+            "Your goal is to simplify this concept visually. Follow these steps strictly: "
+            "1. **Extract Key Concept and Relationship.** Identify the single main subject and its critical function or relationship. "
+            "2. **Generate Visual Metaphor/Diagram Prompt.** Create a highly detailed and effective DALL-E 3 prompt that uses clear, accessible visual metaphors (e.g., gears, doors, pipes) to explain the complex concept for cognitive accessibility. "
+            "The visual style must be a simple, clean **infographic or concept map with minimal labels.**"
+            "The final output MUST be a clean JSON object matching the VisualConcept Pydantic model."
+        ),
         agent=visual_simplifier,
         output_json=VisualConcept,
-        expected_output="Return JSON matching VisualConcept model."
+        expected_output="A JSON object containing the 'key_concept' and the visualization 'dalle_prompt'."
     )
 
+    # Task 2: Image Generation
     image_task = Task(
-        description="Generate visual from the 'dalle_prompt' key in previous JSON output. Return image URL.",
+        description=(
+            "Use the 'dalle_prompt' key from the previous task's Pydantic output. "
+            "Execute the DALL-E 3 tool with this prompt. "
+            "Return ONLY the URL of the generated image, nothing else."
+        ),
         agent=visual_simplifier,
-        context=[concept_task],
-        expected_output="Return the generated image URL as a string."
+        context=[concept_task],  # Depends on the prompt generated in Task 1
+        expected_output="The direct URL of the generated DALL-E image as a string."
     )
 
-    with st.spinner("🎨 Extracting concept and generating image..."):
-        crew = Crew(agents=[visual_simplifier], tasks=[concept_task, image_task], verbose=True)
+    with st.spinner("Extracting concept and generating DALL-E image..."):
+        crew = Crew(
+            agents=[visual_simplifier],
+            tasks=[concept_task, image_task],
+            process=Process.sequential,
+            verbose=True
+        )
+        # Input key is "text" (since the function parameter is complex_text, we pass it under a generic key)
         crew.kickoff(inputs={"text": complex_text})
 
-    concept_data = concept_task.output.pydantic.model_dump() if concept_task.output and concept_task.output.pydantic else {
-        "key_concept": "N/A", "dalle_prompt": "N/A"}
-    image_url = image_task.output.raw if image_task.output else None
+    # --- Result Extraction ---
+    # Safely extract Pydantic output for the concept data
+    concept_data = {}
+    if concept_task.output and concept_task.output.pydantic:
+        concept_data = concept_task.output.pydantic.model_dump()
+
+    # Extract the raw image URL from the final task
+    image_url = image_task.output.raw.strip() if image_task.output else None
+
+    # Handle JSON parsing fallback if necessary (optional, but good practice)
+    if not concept_data and concept_task.output and concept_task.output.raw:
+        try:
+            concept_data = clean_llm_json(concept_task.output.raw)
+        except Exception:
+            pass  # Use the N/A defaults if parsing fails
 
     return {
-        "key_concept": concept_data.get("key_concept"),
-        "dalle_prompt": concept_data.get("dalle_prompt"),
+        "key_concept": concept_data.get("key_concept", "N/A"),
+        "dalle_prompt": concept_data.get("dalle_prompt", "N/A"),
         "generated_image_url": image_url
     }
+
 
 # --- Streamlit Layout ---
 st.title("Multimodal Accessibility Translator")
@@ -461,7 +494,7 @@ with tab2:
 
 # --- TAB 3: Complex-Text-to-Visual Agent ---
 with tab3:
-    st.header("3. Complex Text-to-Visual Agent")
+    st.header("Complex Text-to-Visual Agent")
     complex_text = st.text_area("Paste complex text/abstract:", height=150)
 
     if st.button("Generate Visual", key="btn_visual"):
@@ -469,7 +502,7 @@ with tab3:
             results = run_text_to_visual_crew(complex_text)
 
             if results and results.get('generated_image_url'):
-                st.subheader("✅ Visual Simplification Output")
+                st.subheader("Visual Simplification Output")
 
                 st.markdown(f"**Key Concept:** {results.get('key_concept', 'N/A')}")
 
@@ -478,7 +511,7 @@ with tab3:
 
                 st.divider()
 
-                st.markdown("### Generated Infographic (DALL-E 3) 👇")
+                st.markdown("### Generated Infographic (DALL-E 3)")
                 st.image(
                     results['generated_image_url'],
                     caption=f"Generated for: {results.get('key_concept', 'Concept Map')}")
