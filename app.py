@@ -491,7 +491,6 @@ with tab2:
         else:
             st.error("Please enter text to translate.")
 
-
 # --- TAB 3: Complex-Text-to-Visual Agent ---
 with tab3:
     st.header("Complex Text-to-Visual Agent")
@@ -499,25 +498,40 @@ with tab3:
 
     if st.button("Generate Visual", key="btn_visual"):
         if complex_text:
-            results = run_text_to_visual_crew(complex_text)
+
+            # 1. Add Loading Spinner for the intensive process
+            with st.spinner("Loading Text...."):
+                results = run_text_to_visual_crew(complex_text)
 
             if results and results.get('generated_image_url'):
+
+                # Ensure the URL is clean and display the output
+                image_url = results['generated_image_url'].strip()
+                key_concept = results.get('key_concept', 'N/A')
+
                 st.subheader("Visual Simplification Output")
 
-                st.markdown(f"**Key Concept:** {results.get('key_concept', 'N/A')}")
+                st.markdown(f"**Key Concept:** {key_concept}")
 
                 st.markdown("### DALL-E 3 Prompt")
                 st.code(results.get('dalle_prompt', 'N/A'))
 
                 st.divider()
 
-                st.markdown("### Generated Infographic (DALL-E 3)")
+                st.markdown("### Generated Infographic (DALL-E 3) 👇")
+
+                # Display the Image
                 st.image(
-                    results['generated_image_url'],
-                    caption=f"Generated for: {results.get('key_concept', 'Concept Map')}")
+                    image_url,
+                    caption=f"Generated for: {key_concept}",
+                    width=600
+                )
+
+                st.caption(f"Image Source: [Temporary Link]({image_url})")
 
             else:
-                st.error("Visual generation failed or returned an invalid image URL.")
+                st.error(
+                    "Visual generation failed or returned an invalid image URL. Check console logs for DALL-E errors.")
         else:
             st.error("Please enter complex text to simplify.")
 
