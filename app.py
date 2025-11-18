@@ -11,6 +11,9 @@ from tts_tool import TextToSpeechTool
 from pydantic import BaseModel, Field
 from typing import Type, Optional
 from crewai_tools import SerperDevTool
+import tempfile
+from PIL import Image
+from io import BytesIO
 
 st.markdown("""
 <style>
@@ -55,7 +58,7 @@ class VisualConcept(BaseModel):
 
 
 # --- Configuration & Setup ---
-OPENAI_MODEL = "gpt-4o"
+OPENAI_MODEL = "gpt-4-turbo"
 
 st.set_page_config(
     page_title="Multimodal Accessibility Translator",
@@ -130,23 +133,46 @@ video_searcher = Agent(
 )
 
 
-# --- Crew Functions -----
 def run_image_to_audio_crew(image_bytes: bytes, image_type: str = "jpeg"):
-    """Orchestrates the Image-to-Audio crew using Base64 encoding for robust multimodal input."""
+    """
+    Orchestrates the Image-to-Audio crew, using Base64 encoding and robust JSON cleanup.
+    """
 
-    # 1. Base64 Encoding
-    base64_image = base64.b64encode(image_bytes).decode('utf-8')
-    image_data_uri = f"data:image/{image_type};base64,{base64_image}"
+    # --- 1. IMAGE COMPRESSION AND BASE64 ENCODING ---
+    try:
+        # Load the image from bytes (requires Pillow)
+        img = Image.open(BytesIO(image_bytes))
 
-    # Task 1: Description Generation (Input: Base64 URI)
+        # AGGRESSIVE DOWNSIZING FIX for 30k TPM limit
+        max_dim = 512
+        ratio = max_dim / max(img.size)
+        new_size = (int(img.size[0] * ratio), int(img.size[1] * ratio))
+
+        img = img.resize(new_size, Image.Resampling.LANCZOS)
+
+        buffer = BytesIO()
+        img.save(buffer, format="JPEG", quality=70)
+
+        compressed_bytes = buffer.getvalue()
+
+        # Encode the compressed bytes
+        base64_image = base64.b64encode(compressed_bytes).decode('utf-8')
+        image_data_uri = f"data:image/jpeg;base64,{base64_image}"
+
+    except Exception as e:
+        return {"descriptions": {"brief": "Compression Error", "standard": "Compression Error",
+                                 "detailed": f"Image processing failed: {e}"}, "audio_path": None}
+
+    # Task 1: Description Generation
     description_task = Task(
         description=(
-            "Analyze the provided image data (actual image content). Generate three distinct descriptions: 'brief', 'standard', and 'detailed'. "
+            # Explicitly reference the input variable to ensure multimodal data is attached.
+            "Analyze the image content provided by the variable: {image_data}. Generate three distinct descriptions: 'brief', 'standard', and 'detailed'. "
             "Your output MUST be ONLY the clean JSON object required by the ImageDescription Pydantic model. "
             "DO NOT include any introductory text, markdown wrappers (e.g., ```json), or explanatory comments."
         ),
         agent=visual_describer,
-        output_json=ImageDescription,
+        output_json=ImageDescription,  # Keep this to force structure
         expected_output="Return ONLY the clean JSON object matching ImageDescription model."
     )
 
@@ -170,32 +196,48 @@ def run_image_to_audio_crew(image_bytes: bytes, image_type: str = "jpeg"):
     )
 
     try:
-        # Input key matches the generic multimodal key.
         crew.kickoff(inputs={"image_data": image_data_uri})
     except Exception as e:
         return {"descriptions": {"brief": "Crew Error", "standard": "Crew Error", "detailed": f"Kickoff failed: {e}"},
                 "audio_path": None}
 
-    # Extract Results
+    # --- Result Extraction (DEFINITIVE FIX FOR TRAILING CHARACTERS) ---
     descriptions = {}
-    # If the Pydantic output object exists, it means validation succeeded.
+
+    # 1. Start with the raw output for maximum data safety
+    raw_output = description_task.output.raw if description_task.output and description_task.output.raw else ""
+
+    # 2. Try Pydantic validation first (it might succeed now with the size fix)
     if description_task.output and description_task.output.pydantic:
         descriptions = description_task.output.pydantic.model_dump()
-    else:
-        # If Pydantic fails, try manual parsing as a fallback.
-        if description_task.output and description_task.output.raw:
-            try:
-                descriptions = clean_llm_json(description_task.output.raw)
-            except:
+
+    # 3. Aggressive JSON Isolation if Pydantic failed
+    elif raw_output:
+        try:
+            # Find the indices of the first '{' and the last '}'
+            start_index = raw_output.find('{')
+            end_index = raw_output.rfind('}') + 1
+
+            if start_index != -1 and end_index != 0 and end_index > start_index:
+                # Isolate the pure JSON structure, stripping all the Base64 noise
+                pure_json_string = raw_output[start_index:end_index]
+
+                # Use the global cleanup function (removes ```json, etc.)
+                descriptions = clean_llm_json(pure_json_string)
+            else:
                 descriptions = {"brief": "Parse Error", "standard": "Parse Error",
-                                "detailed": "LLM output did not match Pydantic model."}
-        else:
-            descriptions = {"brief": "No Output", "standard": "No Output", "detailed": "LLM returned no raw output."}
+                                "detailed": "No valid JSON structure found in output."}
+
+        except Exception:
+            descriptions = {"brief": "Parse Error", "standard": "Parse Error",
+                            "detailed": "JSON cleanup failed during final parsing."}
+
+    else:
+        descriptions = {"brief": "No Output", "standard": "No Output", "detailed": "Agent produced no output."}
 
     audio_path = audio_task.output.raw if audio_task.output else None
 
     return {"descriptions": descriptions, "audio_path": audio_path}
-
 
 def run_text_to_sign_crew(text_input: str):
     """Orchestrates the Text-to-Sign crew."""
@@ -272,7 +314,6 @@ def run_text_to_visual_crew(complex_text: str):
         "generated_image_url": image_url
     }
 
-
 # --- Streamlit Layout ---
 st.title("Multimodal Accessibility Translator")
 st.divider()
@@ -285,7 +326,7 @@ tab1, tab2, tab3 = st.tabs([
 
 # --- TAB 1: Image-to-Audio Description ---
 with tab1:
-    st.header("1. Image-to-Audio Description Agent")
+    st.header("Image-to-Audio Description Agent")
     uploaded_file = st.file_uploader("Upload an image (JPG, PNG):", type=["jpg", "jpeg", "png"])
 
     if uploaded_file:
@@ -294,7 +335,12 @@ with tab1:
     if st.button("Generate Audio Description", key="btn_audio"):
         if uploaded_file:
             image_bytes = uploaded_file.read()
-            results = run_image_to_audio_crew(image_bytes, image_type=uploaded_file.type.split('/')[-1])
+
+            # CRITICAL: Pass file type for Base64 (e.g., 'image/jpeg' -> 'jpeg')
+            file_type = uploaded_file.type.split('/')[-1]
+
+            # Execute the CrewAI function
+            results = run_image_to_audio_crew(image_bytes, image_type=file_type)
 
             desc = results['descriptions']
             audio_path = results['audio_path']
@@ -306,10 +352,15 @@ with tab1:
 
             if audio_path and os.path.exists(audio_path):
                 st.audio(audio_path, format="audio/mp3")
+
+                # Download button for the generated audio file
                 with open(audio_path, "rb") as f:
                     st.download_button("Download MP3", f, file_name=os.path.basename(audio_path), mime="audio/mp3")
             else:
                 st.error("Audio generation failed or audio path not found.")
+        else:
+            st.error("Please upload an image to start.")
+
 
 # --- TAB 2: Text-to-Sign Language ---
 with tab2:
