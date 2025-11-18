@@ -1,32 +1,32 @@
 # tts_tool.py
-import os
-from crewai_tools import BaseTool
+from typing import Optional
+from crewai.tools import BaseTool
 from openai import OpenAI
-from pydantic import BaseModel, Field
-from typing import Type
-
-
-class TextToSpeechInput(BaseModel):
-    text_description: str = Field(description="The detailed text to be converted to speech.")
-    output_path: str = Field(description="The local path where the MP3 file should be saved.")
 
 
 class TextToSpeechTool(BaseTool):
-    name: str = "OpenAI_TTS_API"
-    description: "A tool that converts text into an audio file (.mp3) using the OpenAI TTS API."
-    args_schema: Type[TextToSpeechInput] = TextToSpeechInput
+    # REQUIRED TYPE ANNOTATIONS (due to Pydantic v2)
+    name: str = "text_to_speech"
+    description: str = "Converts text into an MP3 audio file using OpenAI TTS."
 
-    def _run(self, text_description: str, output_path: str = "output.mp3") -> str:
-        """Converts text to speech and returns the file path."""
-        # The client automatically picks up the API key from the environment
-        client = OpenAI()
+    def _run(self, text: str, output_path: Optional[str] = None) -> str:
+        """Generate an MP3 file from text and return the absolute path."""
 
+        client = OpenAI()   # uses OPENAI_API_KEY from env
+
+        if output_path is None:
+            output_path = "tts_output.mp3"
+
+        # Call OpenAI TTS endpoint
         response = client.audio.speech.create(
-            model="tts-1",
-            voice="onyx",
-            input=text_description
+            model="gpt-4o-mini-tts",
+            voice="alloy",
+            input=text
         )
 
-        # Save the audio file
-        response.stream_to_file(output_path)
+        # Save MP3
+        with open(output_path, "wb") as f:
+            f.write(response.read())
+
         return output_path
+
