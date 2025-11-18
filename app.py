@@ -275,7 +275,6 @@ def run_text_to_visual_crew(complex_text: str):
 
 # --- Streamlit Layout ---
 st.title("Multimodal Accessibility Translator")
-st.markdown("A multi-agent system built with **CrewAI** for accessible content.")
 st.divider()
 
 tab1, tab2, tab3 = st.tabs([
