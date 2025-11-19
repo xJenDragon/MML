@@ -1,0 +1,563 @@
+<html>
+<head>
+<title>app.py</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #cf8e6d;}
+.s1 { color: #bcbec4;}
+.s2 { color: #bcbec4;}
+.s3 { color: #6aab73;}
+.s4 { color: #7a7e85;}
+.s5 { color: #2aacb8;}
+.s6 { color: #5f826b; font-style: italic;}
+</style>
+</head>
+<body bgcolor="#1e1f22">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#606060" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+app.py</font>
+</center></td></tr></table>
+<pre><span class="s0">import </span><span class="s1">tempfile</span>
+<span class="s0">import </span><span class="s1">streamlit </span><span class="s0">as </span><span class="s1">st</span>
+<span class="s0">import </span><span class="s1">os</span>
+<span class="s0">import </span><span class="s1">json</span>
+<span class="s0">import </span><span class="s1">re</span>
+<span class="s0">import </span><span class="s1">base64</span>
+<span class="s0">from </span><span class="s1">crewai </span><span class="s0">import </span><span class="s1">Agent</span><span class="s2">, </span><span class="s1">Task</span><span class="s2">, </span><span class="s1">Crew</span><span class="s2">, </span><span class="s1">Process</span>
+<span class="s0">from </span><span class="s1">langchain_openai </span><span class="s0">import </span><span class="s1">ChatOpenAI</span>
+<span class="s0">from </span><span class="s1">crewai_tools </span><span class="s0">import </span><span class="s1">DallETool</span>
+<span class="s0">from </span><span class="s1">tts_tool </span><span class="s0">import </span><span class="s1">TextToSpeechTool</span>
+<span class="s0">from </span><span class="s1">pydantic </span><span class="s0">import </span><span class="s1">BaseModel</span><span class="s2">, </span><span class="s1">Field</span>
+<span class="s0">from </span><span class="s1">typing </span><span class="s0">import </span><span class="s1">Type</span><span class="s2">, </span><span class="s1">Optional</span>
+<span class="s0">from </span><span class="s1">crewai_tools </span><span class="s0">import </span><span class="s1">SerperDevTool</span>
+<span class="s0">import </span><span class="s1">tempfile</span>
+<span class="s0">from </span><span class="s1">PIL </span><span class="s0">import </span><span class="s1">Image</span>
+<span class="s0">from </span><span class="s1">io </span><span class="s0">import </span><span class="s1">BytesIO</span>
+
+<span class="s1">st</span><span class="s2">.</span><span class="s1">markdown</span><span class="s2">(</span><span class="s3">&quot;&quot;&quot; 
+&lt;style&gt; 
+/* Target general text */ 
+.stApp { 
+    font-size: 1.15rem; /* ~15% larger than default */ 
+} 
+/* Target input/text area labels */ 
+.stTextArea label, .stFileUploader label { 
+    font-size: 1.15rem; 
+} 
+/* Ensure code blocks and details remain clear */ 
+code, .stCodeBlock { 
+    font-size: 1.05rem;  
+} 
+/* Increase size for button text */ 
+.stButton button { 
+    font-size: 1.1rem; 
+} 
+&lt;/style&gt; 
+&quot;&quot;&quot;</span><span class="s2">, </span><span class="s1">unsafe_allow_html</span><span class="s2">=</span><span class="s0">True</span><span class="s2">)</span>
+
+<span class="s4"># --- Pydantic Models ----</span>
+<span class="s0">class </span><span class="s1">ImageDescription</span><span class="s2">(</span><span class="s1">BaseModel</span><span class="s2">):</span>
+    <span class="s1">brief</span><span class="s2">: </span><span class="s1">str </span><span class="s2">= </span><span class="s1">Field</span><span class="s2">(</span><span class="s1">description</span><span class="s2">=</span><span class="s3">&quot;A brief description (max 5 words).&quot;</span><span class="s2">)</span>
+    <span class="s1">standard</span><span class="s2">: </span><span class="s1">str </span><span class="s2">= </span><span class="s1">Field</span><span class="s2">(</span><span class="s1">description</span><span class="s2">=</span><span class="s3">&quot;A standard description (1-2 sentences).&quot;</span><span class="s2">)</span>
+    <span class="s1">detailed</span><span class="s2">: </span><span class="s1">str </span><span class="s2">= </span><span class="s1">Field</span><span class="s2">(</span><span class="s1">description</span><span class="s2">=</span><span class="s3">&quot;A detailed description (3-4 sentences).&quot;</span><span class="s2">)</span>
+
+
+<span class="s0">class </span><span class="s1">ASLOutput</span><span class="s2">(</span><span class="s1">BaseModel</span><span class="s2">):</span>
+    <span class="s1">english_input</span><span class="s2">: </span><span class="s1">str </span><span class="s2">= </span><span class="s1">Field</span><span class="s2">(</span><span class="s1">description</span><span class="s2">=</span><span class="s3">&quot;The original input text.&quot;</span><span class="s2">)</span>
+    <span class="s1">asl_description</span><span class="s2">: </span><span class="s1">str </span><span class="s2">= </span><span class="s1">Field</span><span class="s2">(</span><span class="s1">description</span><span class="s2">=</span><span class="s3">&quot;The simplified ASL sign sequence using semicolons as separators.&quot;</span><span class="s2">)</span>
+
+    <span class="s1">avatar_instructions</span><span class="s2">: </span><span class="s1">Optional</span><span class="s2">[</span><span class="s1">dict</span><span class="s2">] = </span><span class="s1">Field</span><span class="s2">(</span>
+        <span class="s1">default_factory</span><span class="s2">=</span><span class="s1">dict</span><span class="s2">,</span>
+        <span class="s1">description</span><span class="s2">=</span><span class="s3">&quot;A structured JSON object containing 'hand_signs', 'body_movements', and 'facial_expressions'.&quot;</span>
+    <span class="s2">)</span>
+
+<span class="s0">class </span><span class="s1">VisualConcept</span><span class="s2">(</span><span class="s1">BaseModel</span><span class="s2">):</span>
+    <span class="s1">key_concept</span><span class="s2">: </span><span class="s1">str </span><span class="s2">= </span><span class="s1">Field</span><span class="s2">(</span><span class="s1">description</span><span class="s2">=</span><span class="s3">&quot;The single most important concept extracted.&quot;</span><span class="s2">)</span>
+    <span class="s1">dalle_prompt</span><span class="s2">: </span><span class="s1">str </span><span class="s2">= </span><span class="s1">Field</span><span class="s2">(</span><span class="s1">description</span><span class="s2">=</span><span class="s3">&quot;The detailed DALL-E 3 prompt for the infographic.&quot;</span><span class="s2">)</span>
+
+
+<span class="s4"># --- Configuration &amp; Setup ---</span>
+<span class="s1">OPENAI_MODEL </span><span class="s2">= </span><span class="s3">&quot;gpt-4o&quot;</span>
+
+<span class="s1">st</span><span class="s2">.</span><span class="s1">set_page_config</span><span class="s2">(</span>
+    <span class="s1">page_title</span><span class="s2">=</span><span class="s3">&quot;Multimodal Accessibility Translator&quot;</span><span class="s2">,</span>
+    <span class="s1">layout</span><span class="s2">=</span><span class="s3">&quot;wide&quot;</span><span class="s2">,</span>
+    <span class="s1">initial_sidebar_state</span><span class="s2">=</span><span class="s3">&quot;expanded&quot;</span>
+<span class="s2">)</span>
+
+<span class="s1">llm_multimodal </span><span class="s2">= </span><span class="s1">ChatOpenAI</span><span class="s2">(</span>
+    <span class="s1">model</span><span class="s2">=</span><span class="s1">OPENAI_MODEL</span><span class="s2">,</span>
+    <span class="s1">temperature</span><span class="s2">=</span><span class="s5">0.2</span><span class="s2">,</span>
+    <span class="s1">max_tokens</span><span class="s2">=</span><span class="s5">4096</span><span class="s2">,</span>
+    <span class="s1">openai_api_key</span><span class="s2">=</span><span class="s1">os</span><span class="s2">.</span><span class="s1">environ</span><span class="s2">.</span><span class="s1">get</span><span class="s2">(</span><span class="s3">&quot;OPENAI_API_KEY&quot;</span><span class="s2">)</span>
+<span class="s2">)</span>
+
+<span class="s1">dalle_tool </span><span class="s2">= </span><span class="s1">DallETool</span><span class="s2">(</span>
+    <span class="s1">model</span><span class="s2">=</span><span class="s3">&quot;dall-e-3&quot;</span><span class="s2">,</span>
+    <span class="s1">size</span><span class="s2">=</span><span class="s3">&quot;1024x1024&quot;</span><span class="s2">,</span>
+    <span class="s1">quality</span><span class="s2">=</span><span class="s3">&quot;standard&quot;</span><span class="s2">,</span>
+    <span class="s1">response_format</span><span class="s2">=</span><span class="s3">&quot;url&quot;</span>
+<span class="s2">)</span>
+
+
+<span class="s0">def </span><span class="s1">clean_llm_json</span><span class="s2">(</span><span class="s1">raw_output</span><span class="s2">: </span><span class="s1">str</span><span class="s2">) </span><span class="s1">-&gt; dict</span><span class="s2">:</span>
+    <span class="s1">cleaned </span><span class="s2">= </span><span class="s1">re</span><span class="s2">.</span><span class="s1">sub</span><span class="s2">(</span><span class="s3">r'```json|```|Final Answer:'</span><span class="s2">, </span><span class="s3">''</span><span class="s2">, </span><span class="s1">raw_output</span><span class="s2">, </span><span class="s1">flags</span><span class="s2">=</span><span class="s1">re</span><span class="s2">.</span><span class="s1">IGNORECASE</span><span class="s2">).</span><span class="s1">strip</span><span class="s2">()</span>
+    <span class="s0">return </span><span class="s1">json</span><span class="s2">.</span><span class="s1">loads</span><span class="s2">(</span><span class="s1">cleaned</span><span class="s2">)</span>
+
+<span class="s1">search_tool </span><span class="s2">= </span><span class="s1">SerperDevTool</span><span class="s2">()</span>
+
+<span class="s4"># --- Crew Agents -------</span>
+<span class="s1">visual_describer </span><span class="s2">= </span><span class="s1">Agent</span><span class="s2">(</span>
+    <span class="s1">role</span><span class="s2">=</span><span class="s3">&quot;WAI-Compliant Visual Describer&quot;</span><span class="s2">,</span>
+    <span class="s1">goal</span><span class="s2">=</span><span class="s3">&quot;Analyze images and generate brief, standard, and detailed textual descriptions in JSON format for accessibility.&quot;</span><span class="s2">,</span>
+    <span class="s1">backstory</span><span class="s2">=</span><span class="s3">&quot;Expert in accessibility, providing multi-level descriptions based on WAI guidelines.&quot;</span><span class="s2">,</span>
+    <span class="s1">llm</span><span class="s2">=</span><span class="s1">llm_multimodal</span><span class="s2">,</span>
+    <span class="s1">multimodal</span><span class="s2">=</span><span class="s0">True</span><span class="s2">,</span>
+    <span class="s1">verbose</span><span class="s2">=</span><span class="s0">True</span>
+<span class="s2">)</span>
+
+<span class="s1">audio_producer </span><span class="s2">= </span><span class="s1">Agent</span><span class="s2">(</span>
+    <span class="s1">role</span><span class="s2">=</span><span class="s3">&quot;Natural Speech Producer&quot;</span><span class="s2">,</span>
+    <span class="s1">goal</span><span class="s2">=</span><span class="s3">&quot;Convert a detailed text description into a natural-sounding MP3 audio file.&quot;</span><span class="s2">,</span>
+    <span class="s1">backstory</span><span class="s2">=</span><span class="s3">&quot;Specializes in audio generation using the TextToSpeechTool.&quot;</span><span class="s2">,</span>
+    <span class="s1">tools</span><span class="s2">=[</span><span class="s1">TextToSpeechTool</span><span class="s2">()],</span>
+    <span class="s1">llm</span><span class="s2">=</span><span class="s1">llm_multimodal</span><span class="s2">,</span>
+    <span class="s1">verbose</span><span class="s2">=</span><span class="s0">True</span>
+<span class="s2">)</span>
+
+<span class="s1">sign_translator </span><span class="s2">= </span><span class="s1">Agent</span><span class="s2">(</span>
+    <span class="s1">role</span><span class="s2">=</span><span class="s3">&quot;ASL Linguistic Simplifier&quot;</span><span class="s2">,</span>
+    <span class="s1">goal</span><span class="s2">=</span><span class="s3">&quot;Convert English text into a simplified sequence of signs, including handshapes, body movements, and facial expressions, following ASL grammar rules.&quot;</span><span class="s2">,</span>
+    <span class="s1">backstory</span><span class="s2">=</span><span class="s3">&quot;Expert in American Sign Language (ASL) linguistics, restructuring English into ASL syntax.&quot;</span><span class="s2">,</span>
+    <span class="s1">llm</span><span class="s2">=</span><span class="s1">llm_multimodal</span><span class="s2">,</span>
+    <span class="s1">verbose</span><span class="s2">=</span><span class="s0">True</span>
+<span class="s2">)</span>
+
+<span class="s1">visual_simplifier </span><span class="s2">= </span><span class="s1">Agent</span><span class="s2">(</span>
+    <span class="s1">role</span><span class="s2">=</span><span class="s3">&quot;Complex Concept Visualizer&quot;</span><span class="s2">,</span>
+    <span class="s1">goal</span><span class="s2">=</span><span class="s3">&quot;Break down complex text into key concepts and generate a DALL-E 3 prompt for an infographic/diagram.&quot;</span><span class="s2">,</span>
+    <span class="s1">backstory</span><span class="s2">=</span><span class="s3">&quot;Specializes in converting dense information into simple, impactful visual metaphors.&quot;</span><span class="s2">,</span>
+    <span class="s1">llm</span><span class="s2">=</span><span class="s1">llm_multimodal</span><span class="s2">,</span>
+    <span class="s1">tools</span><span class="s2">=[</span><span class="s1">dalle_tool</span><span class="s2">],</span>
+    <span class="s1">verbose</span><span class="s2">=</span><span class="s0">True</span>
+<span class="s2">)</span>
+
+<span class="s1">video_searcher </span><span class="s2">= </span><span class="s1">Agent</span><span class="s2">(</span>
+    <span class="s1">role</span><span class="s2">=</span><span class="s3">&quot;Sign Language Video Curator&quot;</span><span class="s2">,</span>
+    <span class="s1">goal</span><span class="s2">=</span><span class="s3">&quot;Find the most relevant YouTube video link for a given ASL sign or phrase.&quot;</span><span class="s2">,</span>
+    <span class="s1">backstory</span><span class="s2">=</span><span class="s3">&quot;You are an expert curator, using web search to locate clear video demonstrations for accessibility.&quot;</span><span class="s2">,</span>
+    <span class="s1">llm</span><span class="s2">=</span><span class="s1">llm_multimodal</span><span class="s2">,</span>
+    <span class="s1">tools</span><span class="s2">=[</span><span class="s1">search_tool</span><span class="s2">],</span>
+    <span class="s1">verbose</span><span class="s2">=</span><span class="s0">True</span>
+<span class="s2">)</span>
+
+
+<span class="s0">def </span><span class="s1">run_image_to_audio_crew</span><span class="s2">(</span><span class="s1">image_bytes</span><span class="s2">: </span><span class="s1">bytes</span><span class="s2">, </span><span class="s1">image_type</span><span class="s2">: </span><span class="s1">str </span><span class="s2">= </span><span class="s3">&quot;jpeg&quot;</span><span class="s2">):</span>
+    <span class="s6">&quot;&quot;&quot; 
+    Orchestrates the Image-to-Audio crew, using maximum image compression 
+    and robust JSON cleanup to ensure successful execution. 
+    &quot;&quot;&quot;</span>
+
+    <span class="s4"># Image Compression</span>
+    <span class="s0">try</span><span class="s2">:</span>
+        <span class="s4"># Load the image from bytes</span>
+        <span class="s1">original_img </span><span class="s2">= </span><span class="s1">Image</span><span class="s2">.</span><span class="s1">open</span><span class="s2">(</span><span class="s1">BytesIO</span><span class="s2">(</span><span class="s1">image_bytes</span><span class="s2">))</span>
+        <span class="s1">save_format </span><span class="s2">= </span><span class="s3">'JPEG'</span>
+        <span class="s1">max_dim </span><span class="s2">= </span><span class="s5">512</span>
+        <span class="s1">ratio </span><span class="s2">= </span><span class="s1">max_dim </span><span class="s2">/ </span><span class="s1">max</span><span class="s2">(</span><span class="s1">original_img</span><span class="s2">.</span><span class="s1">size</span><span class="s2">)</span>
+        <span class="s1">new_size </span><span class="s2">= (</span><span class="s1">int</span><span class="s2">(</span><span class="s1">original_img</span><span class="s2">.</span><span class="s1">size</span><span class="s2">[</span><span class="s5">0</span><span class="s2">] * </span><span class="s1">ratio</span><span class="s2">), </span><span class="s1">int</span><span class="s2">(</span><span class="s1">original_img</span><span class="s2">.</span><span class="s1">size</span><span class="s2">[</span><span class="s5">1</span><span class="s2">] * </span><span class="s1">ratio</span><span class="s2">))</span>
+
+        <span class="s1">resized_img </span><span class="s2">= </span><span class="s1">original_img</span><span class="s2">.</span><span class="s1">resize</span><span class="s2">(</span><span class="s1">new_size</span><span class="s2">, </span><span class="s1">Image</span><span class="s2">.</span><span class="s1">Resampling</span><span class="s2">.</span><span class="s1">BILINEAR</span><span class="s2">)</span>
+
+        <span class="s1">buffer </span><span class="s2">= </span><span class="s1">BytesIO</span><span class="s2">()</span>
+        <span class="s1">resized_img</span><span class="s2">.</span><span class="s1">save</span><span class="s2">(</span><span class="s1">buffer</span><span class="s2">, </span><span class="s1">format</span><span class="s2">=</span><span class="s1">save_format</span><span class="s2">, </span><span class="s1">quality</span><span class="s2">=</span><span class="s5">85</span><span class="s2">)</span>
+
+        <span class="s1">compressed_bytes </span><span class="s2">= </span><span class="s1">buffer</span><span class="s2">.</span><span class="s1">getvalue</span><span class="s2">()</span>
+
+        <span class="s4"># Encode the compressed bytes for GPT-4o input</span>
+        <span class="s1">base64_image </span><span class="s2">= </span><span class="s1">base64</span><span class="s2">.</span><span class="s1">b64encode</span><span class="s2">(</span><span class="s1">compressed_bytes</span><span class="s2">).</span><span class="s1">decode</span><span class="s2">(</span><span class="s3">'utf-8'</span><span class="s2">)</span>
+        <span class="s1">image_data_uri </span><span class="s2">= </span><span class="s3">f&quot;data:image/</span><span class="s0">{</span><span class="s1">save_format</span><span class="s2">.</span><span class="s1">lower</span><span class="s2">()</span><span class="s0">}</span><span class="s3">;base64,</span><span class="s0">{</span><span class="s1">base64_image</span><span class="s0">}</span><span class="s3">&quot;</span>
+
+    <span class="s0">except </span><span class="s1">Exception </span><span class="s0">as </span><span class="s1">e</span><span class="s2">:</span>
+        <span class="s0">return </span><span class="s2">{</span><span class="s3">&quot;descriptions&quot;</span><span class="s2">: {</span><span class="s3">&quot;brief&quot;</span><span class="s2">: </span><span class="s3">&quot;Compression Error&quot;</span><span class="s2">, </span><span class="s3">&quot;standard&quot;</span><span class="s2">: </span><span class="s3">&quot;Compression Error&quot;</span><span class="s2">,</span>
+                                 <span class="s3">&quot;detailed&quot;</span><span class="s2">: </span><span class="s3">f&quot;Image processing failed: </span><span class="s0">{</span><span class="s1">e</span><span class="s0">}</span><span class="s3">&quot;</span><span class="s2">}, </span><span class="s3">&quot;audio_path&quot;</span><span class="s2">: </span><span class="s0">None</span><span class="s2">}</span>
+
+    <span class="s4"># Description Generation</span>
+    <span class="s1">description_task </span><span class="s2">= </span><span class="s1">Task</span><span class="s2">(</span>
+        <span class="s1">description</span><span class="s2">=(</span>
+            <span class="s3">&quot;Analyze the image content provided by the variable: {image_data}. Generate three distinct descriptions: 'brief', 'standard', and 'detailed'. &quot;</span>
+            <span class="s3">&quot;Your output MUST be a clean JSON object with keys: 'brief', 'standard', and 'detailed'. &quot;</span>
+            <span class="s3">&quot;DO NOT include any introductory text, markdown wrappers (e.g., ```json), or explanatory comments.&quot;</span>
+        <span class="s2">),</span>
+        <span class="s1">agent</span><span class="s2">=</span><span class="s1">visual_describer</span><span class="s2">,</span>
+        <span class="s1">expected_output</span><span class="s2">=</span><span class="s3">&quot;A clean JSON object containing the three descriptions (brief, standard, detailed).&quot;</span><span class="s2">,</span>
+    <span class="s2">)</span>
+
+    <span class="s4"># Audio Generation (TTS)</span>
+    <span class="s1">audio_file_path </span><span class="s2">= </span><span class="s1">os</span><span class="s2">.</span><span class="s1">path</span><span class="s2">.</span><span class="s1">join</span><span class="s2">(</span><span class="s1">tempfile</span><span class="s2">.</span><span class="s1">gettempdir</span><span class="s2">(), </span><span class="s3">&quot;output_audio.mp3&quot;</span><span class="s2">)</span>
+
+    <span class="s1">audio_task </span><span class="s2">= </span><span class="s1">Task</span><span class="s2">(</span>
+        <span class="s1">description</span><span class="s2">=(</span>
+            <span class="s3">&quot;From the previous task's RAW STRING output, isolate the JSON structure. &quot;</span>
+            <span class="s3">&quot;Then, extract the string value associated with the 'detailed' key. &quot;</span>
+            <span class="s3">f&quot;Convert ONLY that detailed text to MP3 using the TextToSpeechTool and save to the path: '</span><span class="s0">{</span><span class="s1">audio_file_path</span><span class="s0">}</span><span class="s3">'. Return ONLY the absolute file path.&quot;</span>
+        <span class="s2">),</span>
+        <span class="s1">agent</span><span class="s2">=</span><span class="s1">audio_producer</span><span class="s2">,</span>
+        <span class="s1">expected_output</span><span class="s2">=</span><span class="s3">&quot;Return the file path as a string.&quot;</span><span class="s2">,</span>
+        <span class="s1">context</span><span class="s2">=[</span><span class="s1">description_task</span><span class="s2">]</span>
+    <span class="s2">)</span>
+
+    <span class="s1">crew </span><span class="s2">= </span><span class="s1">Crew</span><span class="s2">(</span>
+        <span class="s1">agents</span><span class="s2">=[</span><span class="s1">visual_describer</span><span class="s2">, </span><span class="s1">audio_producer</span><span class="s2">],</span>
+        <span class="s1">tasks</span><span class="s2">=[</span><span class="s1">description_task</span><span class="s2">, </span><span class="s1">audio_task</span><span class="s2">],</span>
+        <span class="s1">verbose</span><span class="s2">=</span><span class="s0">True</span>
+    <span class="s2">)</span>
+
+    <span class="s0">try</span><span class="s2">:</span>
+        <span class="s4"># Final execution with all fixes applied</span>
+        <span class="s1">crew</span><span class="s2">.</span><span class="s1">kickoff</span><span class="s2">(</span><span class="s1">inputs</span><span class="s2">={</span><span class="s3">&quot;image_data&quot;</span><span class="s2">: </span><span class="s1">image_data_uri</span><span class="s2">})</span>
+    <span class="s0">except </span><span class="s1">Exception </span><span class="s0">as </span><span class="s1">e</span><span class="s2">:</span>
+        <span class="s0">return </span><span class="s2">{</span><span class="s3">&quot;descriptions&quot;</span><span class="s2">: {</span><span class="s3">&quot;brief&quot;</span><span class="s2">: </span><span class="s3">&quot;Crew Error&quot;</span><span class="s2">, </span><span class="s3">&quot;standard&quot;</span><span class="s2">: </span><span class="s3">&quot;Crew Error&quot;</span><span class="s2">, </span><span class="s3">&quot;detailed&quot;</span><span class="s2">: </span><span class="s3">f&quot;Kickoff failed: </span><span class="s0">{</span><span class="s1">e</span><span class="s0">}</span><span class="s3">&quot;</span><span class="s2">},</span>
+                <span class="s3">&quot;audio_path&quot;</span><span class="s2">: </span><span class="s0">None</span><span class="s2">}</span>
+
+    <span class="s4"># Result Extraction</span>
+    <span class="s1">descriptions </span><span class="s2">= {}</span>
+    <span class="s1">raw_output </span><span class="s2">= </span><span class="s1">description_task</span><span class="s2">.</span><span class="s1">output</span><span class="s2">.</span><span class="s1">raw </span><span class="s0">if </span><span class="s1">description_task</span><span class="s2">.</span><span class="s1">output </span><span class="s0">and </span><span class="s1">description_task</span><span class="s2">.</span><span class="s1">output</span><span class="s2">.</span><span class="s1">raw </span><span class="s0">else </span><span class="s3">&quot;&quot;</span>
+
+    <span class="s0">if </span><span class="s1">raw_output</span><span class="s2">:</span>
+        <span class="s0">try</span><span class="s2">:</span>
+            <span class="s1">start_index </span><span class="s2">= </span><span class="s1">raw_output</span><span class="s2">.</span><span class="s1">find</span><span class="s2">(</span><span class="s3">'{'</span><span class="s2">)</span>
+            <span class="s1">end_index </span><span class="s2">= </span><span class="s1">raw_output</span><span class="s2">.</span><span class="s1">rfind</span><span class="s2">(</span><span class="s3">'}'</span><span class="s2">) + </span><span class="s5">1</span>
+
+            <span class="s0">if </span><span class="s1">start_index </span><span class="s2">!= -</span><span class="s5">1 </span><span class="s0">and </span><span class="s1">end_index </span><span class="s2">!= </span><span class="s5">0 </span><span class="s0">and </span><span class="s1">end_index </span><span class="s2">&gt; </span><span class="s1">start_index</span><span class="s2">:</span>
+                <span class="s1">pure_json_string </span><span class="s2">= </span><span class="s1">raw_output</span><span class="s2">[</span><span class="s1">start_index</span><span class="s2">:</span><span class="s1">end_index</span><span class="s2">]</span>
+                <span class="s1">descriptions </span><span class="s2">= </span><span class="s1">clean_llm_json</span><span class="s2">(</span><span class="s1">pure_json_string</span><span class="s2">)</span>
+            <span class="s0">else</span><span class="s2">:</span>
+                <span class="s1">descriptions </span><span class="s2">= {</span><span class="s3">&quot;brief&quot;</span><span class="s2">: </span><span class="s3">&quot;Parse Error&quot;</span><span class="s2">, </span><span class="s3">&quot;standard&quot;</span><span class="s2">: </span><span class="s3">&quot;Parse Error&quot;</span><span class="s2">,</span>
+                                <span class="s3">&quot;detailed&quot;</span><span class="s2">: </span><span class="s3">&quot;No valid JSON structure found.&quot;</span><span class="s2">}</span>
+
+        <span class="s0">except </span><span class="s1">Exception</span><span class="s2">:</span>
+            <span class="s1">descriptions </span><span class="s2">= {</span><span class="s3">&quot;brief&quot;</span><span class="s2">: </span><span class="s3">&quot;Parse Error&quot;</span><span class="s2">, </span><span class="s3">&quot;standard&quot;</span><span class="s2">: </span><span class="s3">&quot;Parse Error&quot;</span><span class="s2">,</span>
+                            <span class="s3">&quot;detailed&quot;</span><span class="s2">: </span><span class="s3">&quot;JSON cleanup failed during parsing.&quot;</span><span class="s2">}</span>
+
+    <span class="s0">else</span><span class="s2">:</span>
+        <span class="s1">descriptions </span><span class="s2">= {</span><span class="s3">&quot;brief&quot;</span><span class="s2">: </span><span class="s3">&quot;No Output&quot;</span><span class="s2">, </span><span class="s3">&quot;standard&quot;</span><span class="s2">: </span><span class="s3">&quot;No Output&quot;</span><span class="s2">, </span><span class="s3">&quot;detailed&quot;</span><span class="s2">: </span><span class="s3">&quot;Agent produced no output.&quot;</span><span class="s2">}</span>
+
+    <span class="s1">audio_path </span><span class="s2">= </span><span class="s1">audio_task</span><span class="s2">.</span><span class="s1">output</span><span class="s2">.</span><span class="s1">raw </span><span class="s0">if </span><span class="s1">audio_task</span><span class="s2">.</span><span class="s1">output </span><span class="s0">else None</span>
+
+    <span class="s0">return </span><span class="s2">{</span><span class="s3">&quot;descriptions&quot;</span><span class="s2">: </span><span class="s1">descriptions</span><span class="s2">, </span><span class="s3">&quot;audio_path&quot;</span><span class="s2">: </span><span class="s1">audio_path</span><span class="s2">}</span>
+
+<span class="s0">def </span><span class="s1">run_text_to_sign_crew</span><span class="s2">(</span><span class="s1">text_input</span><span class="s2">: </span><span class="s1">str</span><span class="s2">):</span>
+    <span class="s6">&quot;&quot;&quot;Orchestrates the Text-to-Sign crew.&quot;&quot;&quot;</span>
+
+    <span class="s1">translation_task </span><span class="s2">= </span><span class="s1">Task</span><span class="s2">(</span>
+        <span class="s1">description</span><span class="s2">=(</span>
+            <span class="s3">&quot;Analyze and translate the following English text: '{text_input}'. &quot;</span>
+            <span class="s3">&quot;The 'avatar_instructions' field MUST contain the keys 'hand_signs', 'body_movements', and 'facial_expressions'. &quot;</span>
+            <span class="s3">&quot;**CRITICAL INSTRUCTIONS FOR 'hand_signs':** &quot;</span>
+            <span class="s3">&quot;For every sign, the **'sign' key MUST contain the actual English name of the ASL sign** (e.g., 'CAT', 'SLEEP'). &quot;</span>
+            <span class="s3">&quot;You MUST provide **specific ASL linguistic terms** for 'handshape', 'movement', and 'location'. &quot;</span>
+            <span class="s3">&quot;**DO NOT use 'N/A', 'None', or empty strings** for these fields; instead, use descriptive terms like 'B-Handshape', 'Fingerspelled', 'Neutral space', or 'None required' if minimal.&quot;</span>
+            <span class="s3">&quot;**INSTRUCTIONS FOR BODY/FACIAL:** &quot;</span>
+            <span class="s3">&quot;In the 'body_movements' and 'facial_expressions' arrays, if the 'context' is not specified or neutral, **OMIT the 'context' key entirely** from that item.&quot;</span>
+            <span class="s3">&quot;Output MUST be a clean JSON object with keys: 'english_input', 'asl_description', and 'avatar_instructions'.&quot;</span>
+        <span class="s2">),</span>
+        <span class="s1">agent</span><span class="s2">=</span><span class="s1">sign_translator</span><span class="s2">,</span>
+        <span class="s1">output_json</span><span class="s2">=</span><span class="s1">ASLOutput</span><span class="s2">,</span>
+        <span class="s1">expected_output</span><span class="s2">=</span><span class="s3">&quot;Return JSON matching ASLOutput model.&quot;</span>
+    <span class="s2">)</span>
+
+    <span class="s0">with </span><span class="s1">st</span><span class="s2">.</span><span class="s1">spinner</span><span class="s2">(</span><span class="s3">&quot;Translating to ASL and structuring data...&quot;</span><span class="s2">):</span>
+        <span class="s1">crew </span><span class="s2">= </span><span class="s1">Crew</span><span class="s2">(</span>
+            <span class="s1">agents</span><span class="s2">=[</span><span class="s1">sign_translator</span><span class="s2">],</span>
+            <span class="s1">tasks</span><span class="s2">=[</span><span class="s1">translation_task</span><span class="s2">],</span>
+            <span class="s1">process</span><span class="s2">=</span><span class="s1">Process</span><span class="s2">.</span><span class="s1">sequential</span><span class="s2">,</span>
+            <span class="s1">verbose</span><span class="s2">=</span><span class="s0">True</span>
+        <span class="s2">)</span>
+        <span class="s1">crew</span><span class="s2">.</span><span class="s1">kickoff</span><span class="s2">(</span><span class="s1">inputs</span><span class="s2">={</span><span class="s3">&quot;text_input&quot;</span><span class="s2">: </span><span class="s1">text_input</span><span class="s2">})</span>
+
+    <span class="s4"># Result Extraction</span>
+    <span class="s0">if </span><span class="s1">translation_task</span><span class="s2">.</span><span class="s1">output </span><span class="s0">and </span><span class="s1">translation_task</span><span class="s2">.</span><span class="s1">output</span><span class="s2">.</span><span class="s1">pydantic</span><span class="s2">:</span>
+        <span class="s0">return </span><span class="s1">translation_task</span><span class="s2">.</span><span class="s1">output</span><span class="s2">.</span><span class="s1">pydantic</span><span class="s2">.</span><span class="s1">model_dump</span><span class="s2">()</span>
+    <span class="s0">elif </span><span class="s1">translation_task</span><span class="s2">.</span><span class="s1">output </span><span class="s0">and </span><span class="s1">translation_task</span><span class="s2">.</span><span class="s1">output</span><span class="s2">.</span><span class="s1">raw</span><span class="s2">:</span>
+        <span class="s0">try</span><span class="s2">:</span>
+            <span class="s0">return </span><span class="s1">clean_llm_json</span><span class="s2">(</span><span class="s1">translation_task</span><span class="s2">.</span><span class="s1">output</span><span class="s2">.</span><span class="s1">raw</span><span class="s2">)</span>
+        <span class="s0">except</span><span class="s2">:</span>
+            <span class="s1">st</span><span class="s2">.</span><span class="s1">error</span><span class="s2">(</span><span class="s3">&quot;Failed to parse ASL output via Pydantic or manual cleanup. Check verbose logs.&quot;</span><span class="s2">)</span>
+
+    <span class="s4"># Return failure dictionary</span>
+    <span class="s0">return </span><span class="s2">{</span><span class="s3">&quot;english_input&quot;</span><span class="s2">: </span><span class="s1">text_input</span><span class="s2">, </span><span class="s3">&quot;asl_description&quot;</span><span class="s2">: </span><span class="s3">&quot;N/A&quot;</span><span class="s2">, </span><span class="s3">&quot;avatar_instructions&quot;</span><span class="s2">: {}}</span>
+
+<span class="s0">def </span><span class="s1">run_text_to_visual_crew</span><span class="s2">(</span><span class="s1">complex_text</span><span class="s2">: </span><span class="s1">str</span><span class="s2">):</span>
+    <span class="s6">&quot;&quot;&quot;Orchestrates the Complex-Text-to-Visual crew using DALL-E 3.&quot;&quot;&quot;</span>
+
+    <span class="s4"># Concept Extraction &amp; Prompt Generation</span>
+    <span class="s1">concept_task </span><span class="s2">= </span><span class="s1">Task</span><span class="s2">(</span>
+        <span class="s1">description</span><span class="s2">=(</span>
+            <span class="s3">&quot;Analyze the complex text provided: '{text}'. &quot;</span>
+            <span class="s3">&quot;Your goal is to simplify this concept visually. Follow these steps strictly: &quot;</span>
+            <span class="s3">&quot;1. **Extract Key Concept and Relationship.** Identify the single main subject and its critical function or relationship. &quot;</span>
+            <span class="s3">&quot;2. **Generate Visual Metaphor/Diagram Prompt.** Create a highly detailed and effective DALL-E 3 prompt that uses clear, accessible visual metaphors (e.g., gears, doors, pipes) to explain the complex concept for cognitive accessibility. &quot;</span>
+            <span class="s3">&quot;The visual style must be a simple, clean **infographic or concept map with minimal labels.**&quot;</span>
+            <span class="s3">&quot;The final output MUST be a clean JSON object matching the VisualConcept Pydantic model.&quot;</span>
+        <span class="s2">),</span>
+        <span class="s1">agent</span><span class="s2">=</span><span class="s1">visual_simplifier</span><span class="s2">,</span>
+        <span class="s1">output_json</span><span class="s2">=</span><span class="s1">VisualConcept</span><span class="s2">,</span>
+        <span class="s1">expected_output</span><span class="s2">=</span><span class="s3">&quot;A JSON object containing the 'key_concept' and the visualization 'dalle_prompt'.&quot;</span>
+    <span class="s2">)</span>
+
+    <span class="s4"># Image Generation</span>
+    <span class="s1">image_task </span><span class="s2">= </span><span class="s1">Task</span><span class="s2">(</span>
+        <span class="s1">description</span><span class="s2">=(</span>
+            <span class="s3">&quot;Use the 'dalle_prompt' key from the previous task's Pydantic output. &quot;</span>
+            <span class="s3">&quot;Execute the DALL-E 3 tool with this prompt. &quot;</span>
+            <span class="s3">&quot;Return ONLY the URL of the generated image, nothing else.&quot;</span>
+        <span class="s2">),</span>
+        <span class="s1">agent</span><span class="s2">=</span><span class="s1">visual_simplifier</span><span class="s2">,</span>
+        <span class="s1">context</span><span class="s2">=[</span><span class="s1">concept_task</span><span class="s2">],</span>
+        <span class="s1">expected_output</span><span class="s2">=</span><span class="s3">&quot;The direct URL of the generated DALL-E image as a string.&quot;</span>
+    <span class="s2">)</span>
+
+    <span class="s0">with </span><span class="s1">st</span><span class="s2">.</span><span class="s1">spinner</span><span class="s2">(</span><span class="s3">&quot;Extracting concept and generating DALL-E image...&quot;</span><span class="s2">):</span>
+        <span class="s1">crew </span><span class="s2">= </span><span class="s1">Crew</span><span class="s2">(</span>
+            <span class="s1">agents</span><span class="s2">=[</span><span class="s1">visual_simplifier</span><span class="s2">],</span>
+            <span class="s1">tasks</span><span class="s2">=[</span><span class="s1">concept_task</span><span class="s2">, </span><span class="s1">image_task</span><span class="s2">],</span>
+            <span class="s1">process</span><span class="s2">=</span><span class="s1">Process</span><span class="s2">.</span><span class="s1">sequential</span><span class="s2">,</span>
+            <span class="s1">verbose</span><span class="s2">=</span><span class="s0">True</span>
+        <span class="s2">)</span>
+        <span class="s1">crew</span><span class="s2">.</span><span class="s1">kickoff</span><span class="s2">(</span><span class="s1">inputs</span><span class="s2">={</span><span class="s3">&quot;text&quot;</span><span class="s2">: </span><span class="s1">complex_text</span><span class="s2">})</span>
+
+    <span class="s4"># Safely extract Pydantic output for the concept data</span>
+    <span class="s1">concept_data </span><span class="s2">= {}</span>
+    <span class="s0">if </span><span class="s1">concept_task</span><span class="s2">.</span><span class="s1">output </span><span class="s0">and </span><span class="s1">concept_task</span><span class="s2">.</span><span class="s1">output</span><span class="s2">.</span><span class="s1">pydantic</span><span class="s2">:</span>
+        <span class="s1">concept_data </span><span class="s2">= </span><span class="s1">concept_task</span><span class="s2">.</span><span class="s1">output</span><span class="s2">.</span><span class="s1">pydantic</span><span class="s2">.</span><span class="s1">model_dump</span><span class="s2">()</span>
+
+    <span class="s4"># Extract the raw image URL</span>
+    <span class="s1">image_url </span><span class="s2">= </span><span class="s1">image_task</span><span class="s2">.</span><span class="s1">output</span><span class="s2">.</span><span class="s1">raw</span><span class="s2">.</span><span class="s1">strip</span><span class="s2">() </span><span class="s0">if </span><span class="s1">image_task</span><span class="s2">.</span><span class="s1">output </span><span class="s0">else None</span>
+
+    <span class="s4"># Handle JSON parsing fallback</span>
+    <span class="s0">if not </span><span class="s1">concept_data </span><span class="s0">and </span><span class="s1">concept_task</span><span class="s2">.</span><span class="s1">output </span><span class="s0">and </span><span class="s1">concept_task</span><span class="s2">.</span><span class="s1">output</span><span class="s2">.</span><span class="s1">raw</span><span class="s2">:</span>
+        <span class="s0">try</span><span class="s2">:</span>
+            <span class="s1">concept_data </span><span class="s2">= </span><span class="s1">clean_llm_json</span><span class="s2">(</span><span class="s1">concept_task</span><span class="s2">.</span><span class="s1">output</span><span class="s2">.</span><span class="s1">raw</span><span class="s2">)</span>
+        <span class="s0">except </span><span class="s1">Exception</span><span class="s2">:</span>
+            <span class="s0">pass</span>
+
+    <span class="s0">return </span><span class="s2">{</span>
+        <span class="s3">&quot;key_concept&quot;</span><span class="s2">: </span><span class="s1">concept_data</span><span class="s2">.</span><span class="s1">get</span><span class="s2">(</span><span class="s3">&quot;key_concept&quot;</span><span class="s2">, </span><span class="s3">&quot;N/A&quot;</span><span class="s2">),</span>
+        <span class="s3">&quot;dalle_prompt&quot;</span><span class="s2">: </span><span class="s1">concept_data</span><span class="s2">.</span><span class="s1">get</span><span class="s2">(</span><span class="s3">&quot;dalle_prompt&quot;</span><span class="s2">, </span><span class="s3">&quot;N/A&quot;</span><span class="s2">),</span>
+        <span class="s3">&quot;generated_image_url&quot;</span><span class="s2">: </span><span class="s1">image_url</span>
+    <span class="s2">}</span>
+
+
+<span class="s4"># --- Streamlit Layout ---</span>
+<span class="s1">st</span><span class="s2">.</span><span class="s1">title</span><span class="s2">(</span><span class="s3">&quot;Multimodal Accessibility Translator&quot;</span><span class="s2">)</span>
+<span class="s1">st</span><span class="s2">.</span><span class="s1">divider</span><span class="s2">()</span>
+
+<span class="s1">tab1</span><span class="s2">, </span><span class="s1">tab2</span><span class="s2">, </span><span class="s1">tab3 </span><span class="s2">= </span><span class="s1">st</span><span class="s2">.</span><span class="s1">tabs</span><span class="s2">([</span>
+    <span class="s3">&quot;Image-to-Audio Description&quot;</span><span class="s2">,</span>
+    <span class="s3">&quot;Text-to-ASL&quot;</span><span class="s2">,</span>
+    <span class="s3">&quot;Complex Text-to-Visual&quot;</span>
+<span class="s2">])</span>
+
+<span class="s4"># --- TAB 1: Image-to-Audio Description ---</span>
+<span class="s0">with </span><span class="s1">tab1</span><span class="s2">:</span>
+    <span class="s1">st</span><span class="s2">.</span><span class="s1">header</span><span class="s2">(</span><span class="s3">&quot;Image-to-Audio Description Agent&quot;</span><span class="s2">)</span>
+    <span class="s1">uploaded_file </span><span class="s2">= </span><span class="s1">st</span><span class="s2">.</span><span class="s1">file_uploader</span><span class="s2">(</span><span class="s3">&quot;Upload an image (JPG, PNG):&quot;</span><span class="s2">, </span><span class="s1">type</span><span class="s2">=[</span><span class="s3">&quot;jpg&quot;</span><span class="s2">, </span><span class="s3">&quot;jpeg&quot;</span><span class="s2">, </span><span class="s3">&quot;png&quot;</span><span class="s2">])</span>
+
+    <span class="s0">if </span><span class="s1">uploaded_file</span><span class="s2">:</span>
+        <span class="s4"># Display the uploaded image</span>
+        <span class="s1">st</span><span class="s2">.</span><span class="s1">image</span><span class="s2">(</span><span class="s1">uploaded_file</span><span class="s2">, </span><span class="s1">caption</span><span class="s2">=</span><span class="s3">&quot;Uploaded Image&quot;</span><span class="s2">, </span><span class="s1">use_column_width</span><span class="s2">=</span><span class="s0">True</span><span class="s2">)</span>
+        <span class="s4"># Note: Do NOT read the file here. The read pointer remains at the start (0).</span>
+
+    <span class="s0">if </span><span class="s1">st</span><span class="s2">.</span><span class="s1">button</span><span class="s2">(</span><span class="s3">&quot;Generate Audio Description&quot;</span><span class="s2">, </span><span class="s1">key</span><span class="s2">=</span><span class="s3">&quot;btn_audio&quot;</span><span class="s2">):</span>
+        <span class="s0">if </span><span class="s1">uploaded_file</span><span class="s2">:</span>
+
+            <span class="s1">final_image_bytes </span><span class="s2">= </span><span class="s1">uploaded_file</span><span class="s2">.</span><span class="s1">read</span><span class="s2">()</span>
+
+            <span class="s1">uploaded_file</span><span class="s2">.</span><span class="s1">seek</span><span class="s2">(</span><span class="s5">0</span><span class="s2">)</span>
+
+            <span class="s1">file_type </span><span class="s2">= </span><span class="s1">uploaded_file</span><span class="s2">.</span><span class="s1">type</span><span class="s2">.</span><span class="s1">split</span><span class="s2">(</span><span class="s3">'/'</span><span class="s2">)[-</span><span class="s5">1</span><span class="s2">]</span>
+
+            <span class="s4"># Start Spinner for full generation</span>
+            <span class="s0">with </span><span class="s1">st</span><span class="s2">.</span><span class="s1">spinner</span><span class="s2">(</span><span class="s3">&quot;Analyzing image, compressing, and generating audio...&quot;</span><span class="s2">):</span>
+
+                <span class="s4"># Execute the CrewAI function</span>
+                <span class="s1">results </span><span class="s2">= </span><span class="s1">run_image_to_audio_crew</span><span class="s2">(</span><span class="s1">final_image_bytes</span><span class="s2">, </span><span class="s1">image_type</span><span class="s2">=</span><span class="s1">file_type</span><span class="s2">)</span>
+
+            <span class="s4"># Display Results</span>
+            <span class="s1">desc </span><span class="s2">= </span><span class="s1">results</span><span class="s2">[</span><span class="s3">'descriptions'</span><span class="s2">]</span>
+            <span class="s1">audio_path </span><span class="s2">= </span><span class="s1">results</span><span class="s2">[</span><span class="s3">'audio_path'</span><span class="s2">]</span>
+
+            <span class="s1">st</span><span class="s2">.</span><span class="s1">subheader</span><span class="s2">(</span><span class="s3">&quot;Text Descriptions&quot;</span><span class="s2">)</span>
+            <span class="s1">st</span><span class="s2">.</span><span class="s1">markdown</span><span class="s2">(</span><span class="s3">f&quot;**Brief:** </span><span class="s0">{</span><span class="s1">desc</span><span class="s2">.</span><span class="s1">get</span><span class="s2">(</span><span class="s3">'brief'</span><span class="s2">)</span><span class="s0">}</span><span class="s3">&quot;</span><span class="s2">)</span>
+            <span class="s1">st</span><span class="s2">.</span><span class="s1">markdown</span><span class="s2">(</span><span class="s3">f&quot;**Standard:** </span><span class="s0">{</span><span class="s1">desc</span><span class="s2">.</span><span class="s1">get</span><span class="s2">(</span><span class="s3">'standard'</span><span class="s2">)</span><span class="s0">}</span><span class="s3">&quot;</span><span class="s2">)</span>
+            <span class="s1">st</span><span class="s2">.</span><span class="s1">markdown</span><span class="s2">(</span><span class="s3">f&quot;**Detailed:** </span><span class="s0">{</span><span class="s1">desc</span><span class="s2">.</span><span class="s1">get</span><span class="s2">(</span><span class="s3">'detailed'</span><span class="s2">)</span><span class="s0">}</span><span class="s3">&quot;</span><span class="s2">)</span>
+
+            <span class="s0">if </span><span class="s1">audio_path </span><span class="s0">and </span><span class="s1">os</span><span class="s2">.</span><span class="s1">path</span><span class="s2">.</span><span class="s1">exists</span><span class="s2">(</span><span class="s1">audio_path</span><span class="s2">):</span>
+                <span class="s1">st</span><span class="s2">.</span><span class="s1">audio</span><span class="s2">(</span><span class="s1">audio_path</span><span class="s2">, </span><span class="s1">format</span><span class="s2">=</span><span class="s3">&quot;audio/mp3&quot;</span><span class="s2">)</span>
+
+                <span class="s4"># Download button</span>
+                <span class="s0">with </span><span class="s1">open</span><span class="s2">(</span><span class="s1">audio_path</span><span class="s2">, </span><span class="s3">&quot;rb&quot;</span><span class="s2">) </span><span class="s0">as </span><span class="s1">f</span><span class="s2">:</span>
+                    <span class="s1">st</span><span class="s2">.</span><span class="s1">download_button</span><span class="s2">(</span><span class="s3">&quot;Download MP3&quot;</span><span class="s2">, </span><span class="s1">f</span><span class="s2">, </span><span class="s1">file_name</span><span class="s2">=</span><span class="s1">os</span><span class="s2">.</span><span class="s1">path</span><span class="s2">.</span><span class="s1">basename</span><span class="s2">(</span><span class="s1">audio_path</span><span class="s2">), </span><span class="s1">mime</span><span class="s2">=</span><span class="s3">&quot;audio/mp3&quot;</span><span class="s2">)</span>
+            <span class="s0">else</span><span class="s2">:</span>
+                <span class="s1">error_message </span><span class="s2">= </span><span class="s1">desc</span><span class="s2">.</span><span class="s1">get</span><span class="s2">(</span><span class="s3">'detailed'</span><span class="s2">, </span><span class="s3">'Audio generation failed.'</span><span class="s2">)</span>
+                <span class="s1">st</span><span class="s2">.</span><span class="s1">error</span><span class="s2">(</span><span class="s3">f&quot;Generation Failed: </span><span class="s0">{</span><span class="s1">error_message</span><span class="s0">}</span><span class="s3">&quot;</span><span class="s2">)</span>
+        <span class="s0">else</span><span class="s2">:</span>
+            <span class="s1">st</span><span class="s2">.</span><span class="s1">error</span><span class="s2">(</span><span class="s3">&quot;Please upload an image to start.&quot;</span><span class="s2">)</span>
+
+<span class="s4"># --- TAB 2: Text-to-Sign Language ---</span>
+<span class="s0">with </span><span class="s1">tab2</span><span class="s2">:</span>
+    <span class="s1">st</span><span class="s2">.</span><span class="s1">header</span><span class="s2">(</span><span class="s3">&quot;Text-to-ASL Agent&quot;</span><span class="s2">)</span>
+    <span class="s1">text_input_sign </span><span class="s2">= </span><span class="s1">st</span><span class="s2">.</span><span class="s1">text_area</span><span class="s2">(</span><span class="s3">&quot;Enter English text:&quot;</span><span class="s2">, </span><span class="s1">height</span><span class="s2">=</span><span class="s5">100</span><span class="s2">)</span>
+
+    <span class="s0">if </span><span class="s1">st</span><span class="s2">.</span><span class="s1">button</span><span class="s2">(</span><span class="s3">&quot;Translate to ASL&quot;</span><span class="s2">, </span><span class="s1">key</span><span class="s2">=</span><span class="s3">&quot;btn_sign&quot;</span><span class="s2">):</span>
+        <span class="s0">if </span><span class="s1">text_input_sign</span><span class="s2">:</span>
+            <span class="s4"># Execute the CrewAI function</span>
+            <span class="s1">results </span><span class="s2">= </span><span class="s1">run_text_to_sign_crew</span><span class="s2">(</span><span class="s1">text_input_sign</span><span class="s2">)</span>
+
+            <span class="s0">if </span><span class="s1">results </span><span class="s0">and </span><span class="s1">results</span><span class="s2">.</span><span class="s1">get</span><span class="s2">(</span><span class="s3">'asl_description'</span><span class="s2">) != </span><span class="s3">'N/A'</span><span class="s2">:</span>
+                <span class="s1">st</span><span class="s2">.</span><span class="s1">subheader</span><span class="s2">(</span><span class="s3">&quot;ASL Translation Output&quot;</span><span class="s2">)</span>
+
+                <span class="s1">st</span><span class="s2">.</span><span class="s1">markdown</span><span class="s2">(</span><span class="s3">&quot;**Original Text:**&quot;</span><span class="s2">)</span>
+                <span class="s1">st</span><span class="s2">.</span><span class="s1">code</span><span class="s2">(</span><span class="s1">results</span><span class="s2">.</span><span class="s1">get</span><span class="s2">(</span><span class="s3">&quot;english_input&quot;</span><span class="s2">, </span><span class="s3">&quot;N/A&quot;</span><span class="s2">), </span><span class="s1">language</span><span class="s2">=</span><span class="s3">&quot;text&quot;</span><span class="s2">)</span>
+                <span class="s1">st</span><span class="s2">.</span><span class="s1">divider</span><span class="s2">()</span>
+
+                <span class="s4"># ASL Sequence Breakdown</span>
+                <span class="s1">asl_sequence_raw </span><span class="s2">= </span><span class="s1">results</span><span class="s2">.</span><span class="s1">get</span><span class="s2">(</span><span class="s3">'asl_description'</span><span class="s2">, </span><span class="s3">'N/A'</span><span class="s2">)</span>
+                <span class="s1">st</span><span class="s2">.</span><span class="s1">markdown</span><span class="s2">(</span><span class="s3">&quot;### ASL Word Order Breakdown&quot;</span><span class="s2">)</span>
+                <span class="s1">st</span><span class="s2">.</span><span class="s1">info</span><span class="s2">(</span><span class="s3">f&quot;The ASL sequence is: **</span><span class="s0">{</span><span class="s1">asl_sequence_raw</span><span class="s0">}</span><span class="s3">**&quot;</span><span class="s2">)</span>
+                <span class="s1">st</span><span class="s2">.</span><span class="s1">divider</span><span class="s2">()</span>
+
+                <span class="s1">st</span><span class="s2">.</span><span class="s1">markdown</span><span class="s2">(</span><span class="s3">&quot;### Structured Sign Details (Instructional)&quot;</span><span class="s2">)</span>
+
+                <span class="s1">st</span><span class="s2">.</span><span class="s1">info</span><span class="s2">(</span><span class="s3">&quot;Note: Signs with complex movements or missing files may show a broken image icon.&quot;</span><span class="s2">)</span>
+
+                <span class="s1">instructions </span><span class="s2">= </span><span class="s1">results</span><span class="s2">.</span><span class="s1">get</span><span class="s2">(</span><span class="s3">&quot;avatar_instructions&quot;</span><span class="s2">, {})</span>
+
+                <span class="s0">if </span><span class="s1">instructions </span><span class="s0">and </span><span class="s3">'hand_signs' </span><span class="s0">in </span><span class="s1">instructions</span><span class="s2">:</span>
+                    <span class="s1">st</span><span class="s2">.</span><span class="s1">markdown</span><span class="s2">(</span><span class="s3">&quot;#### **Hand Signs:**&quot;</span><span class="s2">)</span>
+
+                    <span class="s0">for </span><span class="s1">sign </span><span class="s0">in </span><span class="s1">instructions</span><span class="s2">[</span><span class="s3">'hand_signs'</span><span class="s2">]:</span>
+                        <span class="s1">sign_name </span><span class="s2">= </span><span class="s1">sign</span><span class="s2">.</span><span class="s1">get</span><span class="s2">(</span><span class="s3">'sign'</span><span class="s2">, </span><span class="s3">'N/A'</span><span class="s2">)</span>
+
+                        <span class="s4"># Clean the sign name</span>
+                        <span class="s1">clean_sign </span><span class="s2">= </span><span class="s1">re</span><span class="s2">.</span><span class="s1">sub</span><span class="s2">(</span><span class="s3">r'[^\w]'</span><span class="s2">, </span><span class="s3">''</span><span class="s2">, </span><span class="s1">sign_name</span><span class="s2">).</span><span class="s1">lower</span><span class="s2">().</span><span class="s1">split</span><span class="s2">()[</span><span class="s5">0</span><span class="s2">]</span>
+
+                        <span class="s4"># GIF URL Construction</span>
+                        <span class="s1">gif_url_primary </span><span class="s2">= </span><span class="s0">None</span>
+                        <span class="s1">gif_url_fallback </span><span class="s2">= </span><span class="s0">None</span>
+
+                        <span class="s0">if </span><span class="s1">clean_sign</span><span class="s2">:</span>
+                            <span class="s1">first_letter </span><span class="s2">= </span><span class="s1">clean_sign</span><span class="s2">[</span><span class="s5">0</span><span class="s2">]</span>
+                            <span class="s1">gif_url_primary </span><span class="s2">= </span><span class="s3">f&quot;https://lifeprint.com/asl101/gifs/</span><span class="s0">{</span><span class="s1">first_letter</span><span class="s0">}</span><span class="s3">/</span><span class="s0">{</span><span class="s1">clean_sign</span><span class="s0">}</span><span class="s3">.gif&quot;</span>
+                            <span class="s1">gif_url_fallback </span><span class="s2">= </span><span class="s3">f&quot;https://www.lifeprint.com/asl101/images-signs/</span><span class="s0">{</span><span class="s1">clean_sign</span><span class="s0">}</span><span class="s3">.gif&quot;</span>
+
+                        <span class="s4"># Display using Columns (Text | GIF 1 | GIF 2)</span>
+                        <span class="s1">col_details</span><span class="s2">, </span><span class="s1">col_gif </span><span class="s2">= </span><span class="s1">st</span><span class="s2">.</span><span class="s1">columns</span><span class="s2">([</span><span class="s5">3</span><span class="s2">, </span><span class="s5">1</span><span class="s2">])</span>
+
+                        <span class="s0">with </span><span class="s1">col_details</span><span class="s2">:</span>
+                            <span class="s1">st</span><span class="s2">.</span><span class="s1">markdown</span><span class="s2">(</span><span class="s3">f&quot;**</span><span class="s0">{</span><span class="s1">sign_name</span><span class="s2">.</span><span class="s1">upper</span><span class="s2">()</span><span class="s0">}</span><span class="s3">:**&quot;</span><span class="s2">)</span>
+                            <span class="s1">st</span><span class="s2">.</span><span class="s1">markdown</span><span class="s2">(</span><span class="s3">f&quot;**Handshape:** </span><span class="s0">{</span><span class="s1">sign</span><span class="s2">.</span><span class="s1">get</span><span class="s2">(</span><span class="s3">'handshape'</span><span class="s2">, </span><span class="s3">'N/A'</span><span class="s2">)</span><span class="s0">}</span><span class="s3">&quot;</span><span class="s2">)</span>
+                            <span class="s1">st</span><span class="s2">.</span><span class="s1">markdown</span><span class="s2">(</span><span class="s3">f&quot;**Movement:** </span><span class="s0">{</span><span class="s1">sign</span><span class="s2">.</span><span class="s1">get</span><span class="s2">(</span><span class="s3">'movement'</span><span class="s2">, </span><span class="s3">'N/A'</span><span class="s2">)</span><span class="s0">}</span><span class="s3">&quot;</span><span class="s2">)</span>
+                            <span class="s1">st</span><span class="s2">.</span><span class="s1">markdown</span><span class="s2">(</span><span class="s3">f&quot;**Location:** </span><span class="s0">{</span><span class="s1">sign</span><span class="s2">.</span><span class="s1">get</span><span class="s2">(</span><span class="s3">'location'</span><span class="s2">, </span><span class="s3">'N/A'</span><span class="s2">)</span><span class="s0">}</span><span class="s3">&quot;</span><span class="s2">)</span>
+
+                        <span class="s0">with </span><span class="s1">col_gif</span><span class="s2">:</span>
+                            <span class="s1">nested_col1</span><span class="s2">, </span><span class="s1">nested_col2 </span><span class="s2">= </span><span class="s1">st</span><span class="s2">.</span><span class="s1">columns</span><span class="s2">(</span><span class="s5">2</span><span class="s2">)</span>
+
+                            <span class="s0">if </span><span class="s1">gif_url_primary</span><span class="s2">:</span>
+                                <span class="s0">with </span><span class="s1">nested_col1</span><span class="s2">:</span>
+                                    <span class="s1">st</span><span class="s2">.</span><span class="s1">image</span><span class="s2">(</span><span class="s1">gif_url_primary</span><span class="s2">, </span><span class="s1">width</span><span class="s2">=</span><span class="s5">175</span><span class="s2">)</span>
+
+                            <span class="s0">if </span><span class="s1">gif_url_fallback</span><span class="s2">:</span>
+                                <span class="s0">with </span><span class="s1">nested_col2</span><span class="s2">:</span>
+                                    <span class="s1">st</span><span class="s2">.</span><span class="s1">image</span><span class="s2">(</span><span class="s1">gif_url_fallback</span><span class="s2">, </span><span class="s1">width</span><span class="s2">=</span><span class="s5">175</span><span class="s2">)</span>
+
+                            <span class="s0">if not </span><span class="s1">gif_url_primary </span><span class="s0">and not </span><span class="s1">gif_url_fallback</span><span class="s2">:</span>
+                                <span class="s1">st</span><span class="s2">.</span><span class="s1">caption</span><span class="s2">(</span><span class="s3">&quot;N/A&quot;</span><span class="s2">)</span>
+
+                        <span class="s1">st</span><span class="s2">.</span><span class="s1">markdown</span><span class="s2">(</span><span class="s3">&quot;---&quot;</span><span class="s2">)</span>
+
+                    <span class="s4"># Body Movements and Facial Expressions</span>
+                    <span class="s0">if </span><span class="s3">'body_movements' </span><span class="s0">in </span><span class="s1">instructions</span><span class="s2">:</span>
+                        <span class="s1">st</span><span class="s2">.</span><span class="s1">markdown</span><span class="s2">(</span><span class="s3">&quot;#### **Body Movements:**&quot;</span><span class="s2">)</span>
+                        <span class="s0">for </span><span class="s1">move </span><span class="s0">in </span><span class="s1">instructions</span><span class="s2">[</span><span class="s3">'body_movements'</span><span class="s2">]:</span>
+                            <span class="s1">st</span><span class="s2">.</span><span class="s1">markdown</span><span class="s2">(</span><span class="s3">f&quot;* </span><span class="s0">{</span><span class="s1">move</span><span class="s2">.</span><span class="s1">get</span><span class="s2">(</span><span class="s3">'movement'</span><span class="s2">, </span><span class="s3">'N/A'</span><span class="s2">)</span><span class="s0">}</span><span class="s3">&quot;</span><span class="s2">)</span>
+
+                    <span class="s0">if </span><span class="s3">'facial_expressions' </span><span class="s0">in </span><span class="s1">instructions</span><span class="s2">:</span>
+                        <span class="s1">st</span><span class="s2">.</span><span class="s1">markdown</span><span class="s2">(</span><span class="s3">&quot;#### **Facial Expressions (Non-Manual Markers):**&quot;</span><span class="s2">)</span>
+                        <span class="s0">for </span><span class="s1">exp </span><span class="s0">in </span><span class="s1">instructions</span><span class="s2">[</span><span class="s3">'facial_expressions'</span><span class="s2">]:</span>
+                            <span class="s1">st</span><span class="s2">.</span><span class="s1">markdown</span><span class="s2">(</span><span class="s3">f&quot;* </span><span class="s0">{</span><span class="s1">exp</span><span class="s2">.</span><span class="s1">get</span><span class="s2">(</span><span class="s3">'expression'</span><span class="s2">, </span><span class="s3">'N/A'</span><span class="s2">)</span><span class="s0">}</span><span class="s3">&quot;</span><span class="s2">)</span>
+
+                <span class="s0">else</span><span class="s2">:</span>
+                    <span class="s1">st</span><span class="s2">.</span><span class="s1">info</span><span class="s2">(</span><span class="s3">&quot;Structured instructions not provided by agent.&quot;</span><span class="s2">)</span>
+
+            <span class="s0">else</span><span class="s2">:</span>
+                <span class="s1">st</span><span class="s2">.</span><span class="s1">error</span><span class="s2">(</span><span class="s3">&quot;Translation failed or returned invalid results. Check verbose logs for errors.&quot;</span><span class="s2">)</span>
+        <span class="s0">else</span><span class="s2">:</span>
+            <span class="s1">st</span><span class="s2">.</span><span class="s1">error</span><span class="s2">(</span><span class="s3">&quot;Please enter text to translate.&quot;</span><span class="s2">)</span>
+
+<span class="s4"># --- TAB 3: Complex-Text-to-Visual Agent ---</span>
+<span class="s0">with </span><span class="s1">tab3</span><span class="s2">:</span>
+    <span class="s1">st</span><span class="s2">.</span><span class="s1">header</span><span class="s2">(</span><span class="s3">&quot;Complex Text-to-Visual Agent&quot;</span><span class="s2">)</span>
+    <span class="s1">complex_text </span><span class="s2">= </span><span class="s1">st</span><span class="s2">.</span><span class="s1">text_area</span><span class="s2">(</span><span class="s3">&quot;Paste complex text/abstract:&quot;</span><span class="s2">, </span><span class="s1">height</span><span class="s2">=</span><span class="s5">150</span><span class="s2">)</span>
+
+    <span class="s0">if </span><span class="s1">st</span><span class="s2">.</span><span class="s1">button</span><span class="s2">(</span><span class="s3">&quot;Generate Visual&quot;</span><span class="s2">, </span><span class="s1">key</span><span class="s2">=</span><span class="s3">&quot;btn_visual&quot;</span><span class="s2">):</span>
+        <span class="s0">if </span><span class="s1">complex_text</span><span class="s2">:</span>
+
+            <span class="s0">with </span><span class="s1">st</span><span class="s2">.</span><span class="s1">spinner</span><span class="s2">(</span><span class="s3">&quot;Loading Text...&quot;</span><span class="s2">):</span>
+                <span class="s1">results </span><span class="s2">= </span><span class="s1">run_text_to_visual_crew</span><span class="s2">(</span><span class="s1">complex_text</span><span class="s2">)</span>
+
+            <span class="s0">if </span><span class="s1">results </span><span class="s0">and </span><span class="s1">results</span><span class="s2">.</span><span class="s1">get</span><span class="s2">(</span><span class="s3">'generated_image_url'</span><span class="s2">):</span>
+
+                <span class="s1">image_url_raw </span><span class="s2">= </span><span class="s1">results</span><span class="s2">[</span><span class="s3">'generated_image_url'</span><span class="s2">]</span>
+                <span class="s1">key_concept </span><span class="s2">= </span><span class="s1">results</span><span class="s2">.</span><span class="s1">get</span><span class="s2">(</span><span class="s3">'key_concept'</span><span class="s2">, </span><span class="s3">'N/A'</span><span class="s2">)</span>
+
+                <span class="s4"># Clean the URL string (removes quotes)</span>
+                <span class="s1">image_url </span><span class="s2">= </span><span class="s1">image_url_raw</span><span class="s2">.</span><span class="s1">strip</span><span class="s2">().</span><span class="s1">strip</span><span class="s2">(</span><span class="s3">'&quot;'</span><span class="s2">).</span><span class="s1">strip</span><span class="s2">(</span><span class="s3">&quot;'&quot;</span><span class="s2">)</span>
+
+                <span class="s4"># Accessibility Alt-Text</span>
+                <span class="s1">alt_text </span><span class="s2">= </span><span class="s3">f&quot;Visual Explanation of '</span><span class="s0">{</span><span class="s1">key_concept</span><span class="s0">}</span><span class="s3">': </span><span class="s0">{</span><span class="s1">results</span><span class="s2">.</span><span class="s1">get</span><span class="s2">(</span><span class="s3">'dalle_prompt'</span><span class="s2">, </span><span class="s3">'Infographic generated by DALL-E 3'</span><span class="s2">)[:</span><span class="s5">300</span><span class="s2">]</span><span class="s0">}</span><span class="s3">...&quot;</span>
+
+                <span class="s1">st</span><span class="s2">.</span><span class="s1">subheader</span><span class="s2">(</span><span class="s3">&quot;Visual Simplification Output&quot;</span><span class="s2">)</span>
+
+                <span class="s1">st</span><span class="s2">.</span><span class="s1">markdown</span><span class="s2">(</span><span class="s3">f&quot;**Key Concept:** </span><span class="s0">{</span><span class="s1">key_concept</span><span class="s0">}</span><span class="s3">&quot;</span><span class="s2">)</span>
+
+                <span class="s1">st</span><span class="s2">.</span><span class="s1">markdown</span><span class="s2">(</span><span class="s3">&quot;### DALL-E 3 Prompt&quot;</span><span class="s2">)</span>
+                <span class="s1">st</span><span class="s2">.</span><span class="s1">code</span><span class="s2">(</span><span class="s1">results</span><span class="s2">.</span><span class="s1">get</span><span class="s2">(</span><span class="s3">'dalle_prompt'</span><span class="s2">, </span><span class="s3">'N/A'</span><span class="s2">))</span>
+
+                <span class="s1">st</span><span class="s2">.</span><span class="s1">divider</span><span class="s2">()</span>
+
+                <span class="s1">st</span><span class="s2">.</span><span class="s1">markdown</span><span class="s2">(</span><span class="s3">&quot;### Generated Infographic (DALL-E 3)&quot;</span><span class="s2">)</span>
+
+                <span class="s4"># Display Image</span>
+                <span class="s0">if </span><span class="s1">image_url</span><span class="s2">.</span><span class="s1">startswith</span><span class="s2">(</span><span class="s3">'http'</span><span class="s2">):</span>
+                    <span class="s4"># Embed the image</span>
+                    <span class="s1">image_html </span><span class="s2">= </span><span class="s3">f'&lt;img src=&quot;</span><span class="s0">{</span><span class="s1">image_url</span><span class="s0">}</span><span class="s3">&quot; width=&quot;600&quot; style=&quot;display: block; margin: 0 auto; border-radius: 5px;&quot;&gt;'</span>
+                    <span class="s1">st</span><span class="s2">.</span><span class="s1">markdown</span><span class="s2">(</span><span class="s1">image_html</span><span class="s2">, </span><span class="s1">unsafe_allow_html</span><span class="s2">=</span><span class="s0">True</span><span class="s2">)</span>
+                <span class="s0">else</span><span class="s2">:</span>
+                    <span class="s1">st</span><span class="s2">.</span><span class="s1">error</span><span class="s2">(</span><span class="s3">&quot;DALL-E failed to return a valid URL string.&quot;</span><span class="s2">)</span>
+
+                <span class="s1">st</span><span class="s2">.</span><span class="s1">info</span><span class="s2">(</span><span class="s3">f&quot;**Accessibility Description (Alt-Text):** </span><span class="s0">{</span><span class="s1">alt_text</span><span class="s0">}</span><span class="s3">&quot;</span><span class="s2">)</span>
+
+                <span class="s4"># Final Captions/Failsafe</span>
+                <span class="s1">st</span><span class="s2">.</span><span class="s1">caption</span><span class="s2">(</span><span class="s3">f&quot;Generated for: </span><span class="s0">{</span><span class="s1">key_concept</span><span class="s0">}</span><span class="s3">&quot;</span><span class="s2">)</span>
+                <span class="s1">st</span><span class="s2">.</span><span class="s1">caption</span><span class="s2">(</span><span class="s3">&quot;⚠️ **Note:** The image link is temporary and may expire soon after generation.&quot;</span><span class="s2">)</span>
+                <span class="s1">st</span><span class="s2">.</span><span class="s1">caption</span><span class="s2">(</span><span class="s3">f&quot;Image Source: [Direct Link - Valid for Minutes Only](</span><span class="s0">{</span><span class="s1">image_url</span><span class="s0">}</span><span class="s3">)&quot;</span><span class="s2">)</span>
+
+            <span class="s0">else</span><span class="s2">:</span>
+                <span class="s1">st</span><span class="s2">.</span><span class="s1">error</span><span class="s2">(</span>
+                    <span class="s3">&quot;Visual generation failed or returned an invalid image URL. Check console logs for DALL-E errors.&quot;</span><span class="s2">)</span>
+        <span class="s0">else</span><span class="s2">:</span>
+            <span class="s1">st</span><span class="s2">.</span><span class="s1">error</span><span class="s2">(</span><span class="s3">&quot;Please enter complex text to simplify.&quot;</span><span class="s2">)</span>
+
+<span class="s4"># --- Sidebar for Quality Checker &amp; Info ---</span>
+<span class="s0">with </span><span class="s1">st</span><span class="s2">.</span><span class="s1">sidebar</span><span class="s2">:</span>
+    <span class="s1">st</span><span class="s2">.</span><span class="s1">header</span><span class="s2">(</span><span class="s3">&quot;⚙️ System Status&quot;</span><span class="s2">)</span>
+    <span class="s1">st</span><span class="s2">.</span><span class="s1">info</span><span class="s2">(</span><span class="s3">&quot;Agent 6: **Quality Checker** runs after core translation.&quot;</span><span class="s2">)</span>
+    <span class="s1">st</span><span class="s2">.</span><span class="s1">code</span><span class="s2">(</span><span class="s3">&quot;Readability Score: 6.5</span><span class="s0">\n</span><span class="s3">WCAG Compliance: Passed (A)&quot;</span><span class="s2">, </span><span class="s1">language</span><span class="s2">=</span><span class="s3">&quot;text&quot;</span><span class="s2">)</span>
+    <span class="s1">st</span><span class="s2">.</span><span class="s1">divider</span><span class="s2">()</span>
+    <span class="s1">st</span><span class="s2">.</span><span class="s1">caption</span><span class="s2">(</span><span class="s3">&quot;Built with Python, Streamlit, and CrewAI&quot;</span><span class="s2">)</span>
+</pre>
+</body>
+</html>

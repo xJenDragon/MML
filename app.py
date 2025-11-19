@@ -144,7 +144,7 @@ def run_image_to_audio_crew(image_bytes: bytes, image_type: str = "jpeg"):
         # Load the image from bytes
         original_img = Image.open(BytesIO(image_bytes))
         save_format = 'JPEG'
-        max_dim = 800
+        max_dim = 512
         ratio = max_dim / max(original_img.size)
         new_size = (int(original_img.size[0] * ratio), int(original_img.size[1] * ratio))
 
@@ -341,9 +341,8 @@ tab1, tab2, tab3 = st.tabs([
 ])
 
 # --- TAB 1: Image-to-Audio Description ---
-# --- TAB 1: Image-to-Audio Description (FINAL FIX) ---
 with tab1:
-    st.header("1. Image-to-Audio Description Agent")
+    st.header("Image-to-Audio Description Agent")
     uploaded_file = st.file_uploader("Upload an image (JPG, PNG):", type=["jpg", "jpeg", "png"])
 
     if uploaded_file:

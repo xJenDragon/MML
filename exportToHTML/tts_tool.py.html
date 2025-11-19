@@ -1,0 +1,54 @@
+<html>
+<head>
+<title>tts_tool.py</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #7a7e85;}
+.s1 { color: #bcbec4;}
+.s2 { color: #cf8e6d;}
+.s3 { color: #bcbec4;}
+.s4 { color: #6aab73;}
+.s5 { color: #5f826b; font-style: italic;}
+</style>
+</head>
+<body bgcolor="#1e1f22">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#606060" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+tts_tool.py</font>
+</center></td></tr></table>
+<pre><span class="s0"># tts_tool.py</span>
+<span class="s2">from </span><span class="s1">typing </span><span class="s2">import </span><span class="s1">Optional</span>
+<span class="s2">from </span><span class="s1">crewai</span><span class="s3">.</span><span class="s1">tools </span><span class="s2">import </span><span class="s1">BaseTool</span>
+<span class="s2">from </span><span class="s1">openai </span><span class="s2">import </span><span class="s1">OpenAI</span>
+
+
+<span class="s2">class </span><span class="s1">TextToSpeechTool</span><span class="s3">(</span><span class="s1">BaseTool</span><span class="s3">):</span>
+    <span class="s0"># REQUIRED TYPE ANNOTATIONS (due to Pydantic v2)</span>
+    <span class="s1">name</span><span class="s3">: </span><span class="s1">str </span><span class="s3">= </span><span class="s4">&quot;text_to_speech&quot;</span>
+    <span class="s1">description</span><span class="s3">: </span><span class="s1">str </span><span class="s3">= </span><span class="s4">&quot;Converts text into an MP3 audio file using OpenAI TTS.&quot;</span>
+
+    <span class="s2">def </span><span class="s1">_run</span><span class="s3">(</span><span class="s1">self</span><span class="s3">, </span><span class="s1">text</span><span class="s3">: </span><span class="s1">str</span><span class="s3">, </span><span class="s1">output_path</span><span class="s3">: </span><span class="s1">Optional</span><span class="s3">[</span><span class="s1">str</span><span class="s3">] = </span><span class="s2">None</span><span class="s3">) </span><span class="s1">-&gt; str</span><span class="s3">:</span>
+        <span class="s5">&quot;&quot;&quot;Generate an MP3 file from text and return the absolute path.&quot;&quot;&quot;</span>
+
+        <span class="s1">client </span><span class="s3">= </span><span class="s1">OpenAI</span><span class="s3">()   </span><span class="s0"># uses OPENAI_API_KEY from env</span>
+
+        <span class="s2">if </span><span class="s1">output_path </span><span class="s2">is None</span><span class="s3">:</span>
+            <span class="s1">output_path </span><span class="s3">= </span><span class="s4">&quot;tts_output.mp3&quot;</span>
+
+        <span class="s0"># Call OpenAI TTS endpoint</span>
+        <span class="s1">response </span><span class="s3">= </span><span class="s1">client</span><span class="s3">.</span><span class="s1">audio</span><span class="s3">.</span><span class="s1">speech</span><span class="s3">.</span><span class="s1">create</span><span class="s3">(</span>
+            <span class="s1">model</span><span class="s3">=</span><span class="s4">&quot;gpt-4o-mini-tts&quot;</span><span class="s3">,</span>
+            <span class="s1">voice</span><span class="s3">=</span><span class="s4">&quot;alloy&quot;</span><span class="s3">,</span>
+            <span class="s1">input</span><span class="s3">=</span><span class="s1">text</span>
+        <span class="s3">)</span>
+
+        <span class="s0"># Save MP3</span>
+        <span class="s2">with </span><span class="s1">open</span><span class="s3">(</span><span class="s1">output_path</span><span class="s3">, </span><span class="s4">&quot;wb&quot;</span><span class="s3">) </span><span class="s2">as </span><span class="s1">f</span><span class="s3">:</span>
+            <span class="s1">f</span><span class="s3">.</span><span class="s1">write</span><span class="s3">(</span><span class="s1">response</span><span class="s3">.</span><span class="s1">read</span><span class="s3">())</span>
+
+        <span class="s2">return </span><span class="s1">output_path</span>
+
+</pre>
+</body>
+</html>
