@@ -58,7 +58,7 @@ class VisualConcept(BaseModel):
 
 
 # --- Configuration & Setup ---
-OPENAI_MODEL = "gpt-4-turbo"
+OPENAI_MODEL = "gpt-4o"
 
 st.set_page_config(
     page_title="Multimodal Accessibility Translator",
@@ -94,7 +94,7 @@ visual_describer = Agent(
     backstory="Expert in accessibility, providing multi-level descriptions based on WAI guidelines.",
     llm=llm_multimodal,
     multimodal=True,
-    verbose=True  # Keep True for final debugging/demonstration logs
+    verbose=True
 )
 
 audio_producer = Agent(
@@ -135,54 +135,53 @@ video_searcher = Agent(
 
 def run_image_to_audio_crew(image_bytes: bytes, image_type: str = "jpeg"):
     """
-    Orchestrates the Image-to-Audio crew, using Base64 encoding and robust JSON cleanup.
+    Orchestrates the Image-to-Audio crew, using maximum image compression
+    and robust JSON cleanup to ensure successful execution.
     """
 
-    # --- 1. IMAGE COMPRESSION AND BASE64 ENCODING ---
+    # Image Compression
     try:
-        # Load the image from bytes (requires Pillow)
-        img = Image.open(BytesIO(image_bytes))
+        # Load the image from bytes
+        original_img = Image.open(BytesIO(image_bytes))
+        save_format = 'JPEG'
+        max_dim = 800
+        ratio = max_dim / max(original_img.size)
+        new_size = (int(original_img.size[0] * ratio), int(original_img.size[1] * ratio))
 
-        # AGGRESSIVE DOWNSIZING FIX for 30k TPM limit
-        max_dim = 512
-        ratio = max_dim / max(img.size)
-        new_size = (int(img.size[0] * ratio), int(img.size[1] * ratio))
-
-        img = img.resize(new_size, Image.Resampling.LANCZOS)
+        resized_img = original_img.resize(new_size, Image.Resampling.BILINEAR)
 
         buffer = BytesIO()
-        img.save(buffer, format="JPEG", quality=70)
+        resized_img.save(buffer, format=save_format, quality=85)
 
         compressed_bytes = buffer.getvalue()
 
-        # Encode the compressed bytes
+        # Encode the compressed bytes for GPT-4o input
         base64_image = base64.b64encode(compressed_bytes).decode('utf-8')
-        image_data_uri = f"data:image/jpeg;base64,{base64_image}"
+        image_data_uri = f"data:image/{save_format.lower()};base64,{base64_image}"
 
     except Exception as e:
         return {"descriptions": {"brief": "Compression Error", "standard": "Compression Error",
                                  "detailed": f"Image processing failed: {e}"}, "audio_path": None}
 
-    # Task 1: Description Generation
+    # Description Generation
     description_task = Task(
         description=(
-            # Explicitly reference the input variable to ensure multimodal data is attached.
             "Analyze the image content provided by the variable: {image_data}. Generate three distinct descriptions: 'brief', 'standard', and 'detailed'. "
-            "Your output MUST be ONLY the clean JSON object required by the ImageDescription Pydantic model. "
+            "Your output MUST be a clean JSON object with keys: 'brief', 'standard', and 'detailed'. "
             "DO NOT include any introductory text, markdown wrappers (e.g., ```json), or explanatory comments."
         ),
         agent=visual_describer,
-        output_json=ImageDescription,  # Keep this to force structure
-        expected_output="Return ONLY the clean JSON object matching ImageDescription model."
+        expected_output="A clean JSON object containing the three descriptions (brief, standard, detailed).",
     )
 
-    # Task 2: Audio Generation
+    # Audio Generation (TTS)
     audio_file_path = os.path.join(tempfile.gettempdir(), "output_audio.mp3")
 
     audio_task = Task(
         description=(
-            "Extract the 'detailed' description from the previous task's Pydantic output. "
-            f"Convert that text to MP3 using the TextToSpeechTool and save to the path: '{audio_file_path}'. Return ONLY the absolute file path."
+            "From the previous task's RAW STRING output, isolate the JSON structure. "
+            "Then, extract the string value associated with the 'detailed' key. "
+            f"Convert ONLY that detailed text to MP3 using the TextToSpeechTool and save to the path: '{audio_file_path}'. Return ONLY the absolute file path."
         ),
         agent=audio_producer,
         expected_output="Return the file path as a string.",
@@ -196,41 +195,31 @@ def run_image_to_audio_crew(image_bytes: bytes, image_type: str = "jpeg"):
     )
 
     try:
+        # Final execution with all fixes applied
         crew.kickoff(inputs={"image_data": image_data_uri})
     except Exception as e:
         return {"descriptions": {"brief": "Crew Error", "standard": "Crew Error", "detailed": f"Kickoff failed: {e}"},
                 "audio_path": None}
 
-    # --- Result Extraction (DEFINITIVE FIX FOR TRAILING CHARACTERS) ---
+    # Result Extraction
     descriptions = {}
-
-    # 1. Start with the raw output for maximum data safety
     raw_output = description_task.output.raw if description_task.output and description_task.output.raw else ""
 
-    # 2. Try Pydantic validation first (it might succeed now with the size fix)
-    if description_task.output and description_task.output.pydantic:
-        descriptions = description_task.output.pydantic.model_dump()
-
-    # 3. Aggressive JSON Isolation if Pydantic failed
-    elif raw_output:
+    if raw_output:
         try:
-            # Find the indices of the first '{' and the last '}'
             start_index = raw_output.find('{')
             end_index = raw_output.rfind('}') + 1
 
             if start_index != -1 and end_index != 0 and end_index > start_index:
-                # Isolate the pure JSON structure, stripping all the Base64 noise
                 pure_json_string = raw_output[start_index:end_index]
-
-                # Use the global cleanup function (removes ```json, etc.)
                 descriptions = clean_llm_json(pure_json_string)
             else:
                 descriptions = {"brief": "Parse Error", "standard": "Parse Error",
-                                "detailed": "No valid JSON structure found in output."}
+                                "detailed": "No valid JSON structure found."}
 
         except Exception:
             descriptions = {"brief": "Parse Error", "standard": "Parse Error",
-                            "detailed": "JSON cleanup failed during final parsing."}
+                            "detailed": "JSON cleanup failed during parsing."}
 
     else:
         descriptions = {"brief": "No Output", "standard": "No Output", "detailed": "Agent produced no output."}
@@ -268,7 +257,7 @@ def run_text_to_sign_crew(text_input: str):
         )
         crew.kickoff(inputs={"text_input": text_input})
 
-    # --- Result Extraction ---
+    # Result Extraction
     if translation_task.output and translation_task.output.pydantic:
         return translation_task.output.pydantic.model_dump()
     elif translation_task.output and translation_task.output.raw:
@@ -283,7 +272,7 @@ def run_text_to_sign_crew(text_input: str):
 def run_text_to_visual_crew(complex_text: str):
     """Orchestrates the Complex-Text-to-Visual crew using DALL-E 3."""
 
-    # Task 1: Concept Extraction & Prompt Generation
+    # Concept Extraction & Prompt Generation
     concept_task = Task(
         description=(
             "Analyze the complex text provided: '{text}'. "
@@ -298,7 +287,7 @@ def run_text_to_visual_crew(complex_text: str):
         expected_output="A JSON object containing the 'key_concept' and the visualization 'dalle_prompt'."
     )
 
-    # Task 2: Image Generation
+    # Image Generation
     image_task = Task(
         description=(
             "Use the 'dalle_prompt' key from the previous task's Pydantic output. "
@@ -306,7 +295,7 @@ def run_text_to_visual_crew(complex_text: str):
             "Return ONLY the URL of the generated image, nothing else."
         ),
         agent=visual_simplifier,
-        context=[concept_task],  # Depends on the prompt generated in Task 1
+        context=[concept_task],
         expected_output="The direct URL of the generated DALL-E image as a string."
     )
 
@@ -317,24 +306,22 @@ def run_text_to_visual_crew(complex_text: str):
             process=Process.sequential,
             verbose=True
         )
-        # Input key is "text" (since the function parameter is complex_text, we pass it under a generic key)
         crew.kickoff(inputs={"text": complex_text})
 
-    # --- Result Extraction ---
     # Safely extract Pydantic output for the concept data
     concept_data = {}
     if concept_task.output and concept_task.output.pydantic:
         concept_data = concept_task.output.pydantic.model_dump()
 
-    # Extract the raw image URL from the final task
+    # Extract the raw image URL
     image_url = image_task.output.raw.strip() if image_task.output else None
 
-    # Handle JSON parsing fallback if necessary (optional, but good practice)
+    # Handle JSON parsing fallback
     if not concept_data and concept_task.output and concept_task.output.raw:
         try:
             concept_data = clean_llm_json(concept_task.output.raw)
         except Exception:
-            pass  # Use the N/A defaults if parsing fails
+            pass
 
     return {
         "key_concept": concept_data.get("key_concept", "N/A"),
@@ -354,23 +341,32 @@ tab1, tab2, tab3 = st.tabs([
 ])
 
 # --- TAB 1: Image-to-Audio Description ---
+# --- TAB 1: Image-to-Audio Description (FINAL FIX) ---
 with tab1:
-    st.header("Image-to-Audio Description Agent")
+    st.header("1. Image-to-Audio Description Agent")
     uploaded_file = st.file_uploader("Upload an image (JPG, PNG):", type=["jpg", "jpeg", "png"])
 
     if uploaded_file:
+        # Display the uploaded image
         st.image(uploaded_file, caption="Uploaded Image", use_column_width=True)
+        # Note: Do NOT read the file here. The read pointer remains at the start (0).
 
     if st.button("Generate Audio Description", key="btn_audio"):
         if uploaded_file:
-            image_bytes = uploaded_file.read()
 
-            # CRITICAL: Pass file type for Base64 (e.g., 'image/jpeg' -> 'jpeg')
+            final_image_bytes = uploaded_file.read()
+
+            uploaded_file.seek(0)
+
             file_type = uploaded_file.type.split('/')[-1]
 
-            # Execute the CrewAI function
-            results = run_image_to_audio_crew(image_bytes, image_type=file_type)
+            # Start Spinner for full generation
+            with st.spinner("Analyzing image, compressing, and generating audio..."):
 
+                # Execute the CrewAI function
+                results = run_image_to_audio_crew(final_image_bytes, image_type=file_type)
+
+            # Display Results
             desc = results['descriptions']
             audio_path = results['audio_path']
 
@@ -382,14 +378,14 @@ with tab1:
             if audio_path and os.path.exists(audio_path):
                 st.audio(audio_path, format="audio/mp3")
 
-                # Download button for the generated audio file
+                # Download button
                 with open(audio_path, "rb") as f:
                     st.download_button("Download MP3", f, file_name=os.path.basename(audio_path), mime="audio/mp3")
             else:
-                st.error("Audio generation failed or audio path not found.")
+                error_message = desc.get('detailed', 'Audio generation failed.')
+                st.error(f"Generation Failed: {error_message}")
         else:
             st.error("Please upload an image to start.")
-
 
 # --- TAB 2: Text-to-Sign Language ---
 with tab2:
@@ -404,19 +400,16 @@ with tab2:
             if results and results.get('asl_description') != 'N/A':
                 st.subheader("ASL Translation Output")
 
-                # 1. Original Text
                 st.markdown("**Original Text:**")
                 st.code(results.get("english_input", "N/A"), language="text")
                 st.divider()
 
-                # --- 2. ASL Sequence Breakdown (Restored) ---
+                # ASL Sequence Breakdown
                 asl_sequence_raw = results.get('asl_description', 'N/A')
                 st.markdown("### ASL Word Order Breakdown")
                 st.info(f"The ASL sequence is: **{asl_sequence_raw}**")
                 st.divider()
-                # ---------------------------------------------
 
-                # 3. Structured Sign Details & GIF Display
                 st.markdown("### Structured Sign Details (Instructional)")
 
                 st.info("Note: Signs with complex movements or missing files may show a broken image icon.")
@@ -432,7 +425,7 @@ with tab2:
                         # Clean the sign name
                         clean_sign = re.sub(r'[^\w]', '', sign_name).lower().split()[0]
 
-                        # GIF URL Construction (Dual Attempt)
+                        # GIF URL Construction
                         gif_url_primary = None
                         gif_url_fallback = None
 
@@ -441,18 +434,16 @@ with tab2:
                             gif_url_primary = f"https://lifeprint.com/asl101/gifs/{first_letter}/{clean_sign}.gif"
                             gif_url_fallback = f"https://www.lifeprint.com/asl101/images-signs/{clean_sign}.gif"
 
-                        # --- Display using Columns (Text | GIF 1 | GIF 2) ---
+                        # Display using Columns (Text | GIF 1 | GIF 2)
                         col_details, col_gif = st.columns([3, 1])
 
                         with col_details:
-                            # Display Sign Name and Details (Dictionary Style)
                             st.markdown(f"**{sign_name.upper()}:**")
                             st.markdown(f"**Handshape:** {sign.get('handshape', 'N/A')}")
                             st.markdown(f"**Movement:** {sign.get('movement', 'N/A')}")
                             st.markdown(f"**Location:** {sign.get('location', 'N/A')}")
 
                         with col_gif:
-                            # Nested Columns for side-by-side GIF attempts
                             nested_col1, nested_col2 = st.columns(2)
 
                             if gif_url_primary:
@@ -466,9 +457,9 @@ with tab2:
                             if not gif_url_primary and not gif_url_fallback:
                                 st.caption("N/A")
 
-                        st.markdown("---")  # Separator for the next sign
+                        st.markdown("---")
 
-                    # --- Body Movements and Facial Expressions display continues here (unchanged) ---
+                    # Body Movements and Facial Expressions
                     if 'body_movements' in instructions:
                         st.markdown("#### **Body Movements:**")
                         for move in instructions['body_movements']:
@@ -506,10 +497,8 @@ with tab3:
                 # Clean the URL string (removes quotes)
                 image_url = image_url_raw.strip().strip('"').strip("'")
 
-                # --- CALCULATE ACCESSIBILITY ALT-TEXT ---
-                # Use the Key Concept and the first part of the generated prompt
-                alt_text = f"Visual Explanation of '{key_concept}': {results.get('dalle_prompt', 'Infographic generated by DALL-E 3')[:150]}..."
-                # ----------------------------------------
+                # Accessibility Alt-Text
+                alt_text = f"Visual Explanation of '{key_concept}': {results.get('dalle_prompt', 'Infographic generated by DALL-E 3')[:300]}..."
 
                 st.subheader("Visual Simplification Output")
 
@@ -522,18 +511,15 @@ with tab3:
 
                 st.markdown("### Generated Infographic (DALL-E 3)")
 
-                # --- DISPLAY IMAGE (HTML FIX) ---
+                # Display Image
                 if image_url.startswith('http'):
-                    # Embed the image using a standard HTML <img> tag for stable display
+                    # Embed the image
                     image_html = f'<img src="{image_url}" width="600" style="display: block; margin: 0 auto; border-radius: 5px;">'
                     st.markdown(image_html, unsafe_allow_html=True)
                 else:
                     st.error("DALL-E failed to return a valid URL string.")
-                # ---------------------------------
 
-                # --- DISPLAY ACCESSIBILITY ALT-TEXT ---
                 st.info(f"**Accessibility Description (Alt-Text):** {alt_text}")
-                # --------------------------------------
 
                 # Final Captions/Failsafe
                 st.caption(f"Generated for: {key_concept}")
